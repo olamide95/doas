@@ -3,9 +3,10 @@ const config = {
     apiEndpoint: process.env.NEXT_PUBLIC_API_ENDPOINT!,
     prodApiEndpoint: process.env.NEXT_PUBLIC_PROD_API_ENDPOINT!,
     imagekit: {
-      publicKey: "public_hAib6V+2qHj3JDVcVNy7XKmh6Xg=",
-      urlEndpoint: "https://ik.imagekit.io/jd5faewd2",
-      privateKey: "private_qX4uPDrZb1oknp3WhMmwtrsNpgw=",
+      publicKey: process.env.NEXT_PUBLIC_IMAGEKIT_PUBLIC_KEY!,
+      urlEndpoint: process.env.NEXT_PUBLIC_IMAGEKIT_URL_ENDPOINT!,
+      privateKey: process.env.IMAGEKIT_PRIVATE_KEY!,
+      
     },
     databaseUrl: process.env.DATABASE_URL!,
     upstash: {

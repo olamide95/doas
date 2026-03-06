@@ -22,20 +22,11 @@ import { getStorage, ref, uploadBytes, getDownloadURL } from "firebase/storage"
 import { v4 as uuidv4 } from "uuid"
 import { Building, User, FileText, MapPin, Briefcase, ChevronRight, ChevronLeft, Lock } from "lucide-react"
 
-// Initialize Firebase
-const firebaseConfig = {
-  apiKey: "AIzaSyA3R15_tAiapTQcKc_6cL8nN_FPoWRDFI0",
-  authDomain: "doas-771c4.firebaseapp.com",
-  projectId: "doas-771c4",
-  storageBucket: "doas-771c4.firebasestorage.app",
-  messagingSenderId: "376823252081",
-  appId: "1:376823252081:web:871302513d4da5fae107d0",
-  measurementId: "G-5RM0N8JG2W"
-};
+import { db } from "@/lib/firebase"
 
-const app = initializeApp(firebaseConfig);
-const db = getFirestore(app);
-const storage = getStorage(app);
+// Initialize Firebase
+
+const storage = getStorage()
 
 const formSchema = z.object({
   applicantName: z.string().min(2, { message: "Applicant name must be at least 2 characters." }),

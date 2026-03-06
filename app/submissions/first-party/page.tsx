@@ -20,22 +20,11 @@ import { initializeApp } from "firebase/app"
 import { getStorage, ref, uploadBytes, getDownloadURL } from "firebase/storage"
 import { getFirestore, collection, addDoc, serverTimestamp } from "firebase/firestore"
 import { Building, User, FileText, MapPin, ChevronRight, ChevronLeft } from "lucide-react"
+import { db } from "@/lib/firebase"
 
 // Initialize Firebase
-const firebaseConfig = {
-  apiKey: "AIzaSyA3R15_tAiapTQcKc_6cL8nN_FPoWRDFI0",
-  authDomain: "doas-771c4.firebaseapp.com",
-  projectId: "doas-771c4",
-  storageBucket: "doas-771c4.firebasestorage.app",
-  messagingSenderId: "376823252081",
-  appId: "1:376823252081:web:871302513d4da5fae107d0",
-  measurementId: "G-5RM0N8JG2W"
-};
 
-const app = initializeApp(firebaseConfig);
-const storage = getStorage(app);
-const db = getFirestore(app);
-
+const storage = getStorage()
 const formSchema = z.object({
   applicantName: z.string().min(2, { message: "Applicant name must be at least 2 characters." }),
   contactPhoneNumber: z.string().min(10, { message: "Please enter a valid phone number." }),

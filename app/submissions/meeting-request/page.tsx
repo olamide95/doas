@@ -19,21 +19,11 @@ import { getFirestore, collection, addDoc, serverTimestamp } from "firebase/fire
 import { getStorage, ref, uploadBytes, getDownloadURL } from "firebase/storage"
 import { v4 as uuidv4 } from "uuid"
 import { Calendar, User, Mail, Phone, Building, FileText } from "lucide-react"
+import { db } from "@/lib/firebase"
 
 // Initialize Firebase
-const firebaseConfig = {
-  apiKey: "AIzaSyA3R15_tAiapTQcKc_6cL8nN_FPoWRDFI0",
-  authDomain: "doas-771c4.firebaseapp.com",
-  projectId: "doas-771c4",
-  storageBucket: "doas-771c4.firebasestorage.app",
-  messagingSenderId: "376823252081",
-  appId: "1:376823252081:web:871302513d4da5fae107d0",
-  measurementId: "G-5RM0N8JG2W"
-};
 
-const app = initializeApp(firebaseConfig);
-const db = getFirestore(app);
-const storage = getStorage(app);
+const storage = getStorage()
 
 const formSchema = z.object({
   fullName: z.string().min(2, { message: "Full name must be at least 2 characters." }),

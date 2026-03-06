@@ -2,7 +2,7 @@
 "use client"
 
 import type React from "react"
-import { useState, useEffect } from "react"
+import { useState, useEffect, Suspense } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { useForm } from "react-hook-form"
@@ -16,15 +16,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useToast } from "@/components/ui/use-toast"
 import { Form, FormControl, FormDescription, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form"
-import { initializeApp } from "firebase/app"
-import { getFirestore, collection, addDoc, serverTimestamp, getDoc, doc, updateDoc, query, where, getDocs } from "firebase/firestore"
+import { collection, addDoc, serverTimestamp, doc, updateDoc, query, where, getDocs } from "firebase/firestore"
 import { getStorage, ref, uploadBytes, getDownloadURL } from "firebase/storage"
 import { v4 as uuidv4 } from "uuid"
 import { Building, User, FileText, MapPin, Briefcase, ChevronRight, ChevronLeft, Lock } from "lucide-react"
 
 import { db } from "@/lib/firebase"
-
-// Initialize Firebase
 
 const storage = getStorage()
 
@@ -49,7 +46,8 @@ const formSchema = z.object({
   practitionerLicenseNumber: z.string().min(1, { message: "License number is required." }).optional(),
 })
 
-export default function ThirdPartySubmissionForm() {
+// ── Inner component that uses useSearchParams ──────────────────────────────
+function ThirdPartyForm() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const submissionId = searchParams.get("id")
@@ -102,12 +100,11 @@ export default function ThirdPartySubmissionForm() {
       setIsLoading(true)
       const q = query(collection(db, "thirdPartySubmissions"), where("submissionId", "==", submissionId))
       const querySnapshot = await getDocs(q)
-      
+
       if (!querySnapshot.empty) {
         const data = querySnapshot.docs[0].data()
         setExistingSubmission({ id: querySnapshot.docs[0].id, ...data })
-        
-        // Populate form with existing data
+
         form.reset({
           applicantName: data.applicantName || "",
           contactPhoneNumber: data.contactPhoneNumber || "",
@@ -129,7 +126,6 @@ export default function ThirdPartySubmissionForm() {
           practitionerLicenseNumber: data.practitionerLicenseNumber || "",
         })
 
-        // Set active tab based on status
         if (data.status === "Pending") {
           setActiveTab("applicant-info")
         } else if (data.status === "Site Visit Completed") {
@@ -143,7 +139,7 @@ export default function ThirdPartySubmissionForm() {
       toast({
         title: "Error",
         description: "Failed to load submission data.",
-        variant: "destructive"
+        variant: "destructive",
       })
     } finally {
       setIsLoading(false)
@@ -152,37 +148,29 @@ export default function ThirdPartySubmissionForm() {
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>, fileType: string) => {
     if (e.target.files && e.target.files[0]) {
-      setFiles({
-        ...files,
-        [fileType]: e.target.files[0],
-      })
+      setFiles({ ...files, [fileType]: e.target.files[0] })
     }
   }
 
   const uploadFileToStorage = async (file: File, path: string) => {
-    if (!file) return null;
-    
-    const filePath = `${path}/${uuidv4()}_${file.name}`;
-    const storageRef = ref(storage, filePath);
-    await uploadBytes(storageRef, file);
-    return getDownloadURL(storageRef);
-  };
+    if (!file) return null
+    const filePath = `${path}/${uuidv4()}_${file.name}`
+    const storageRef = ref(storage, filePath)
+    await uploadBytes(storageRef, file)
+    return getDownloadURL(storageRef)
+  }
 
   const onSubmit = async (values: z.infer<typeof formSchema>) => {
     try {
       setIsSubmitting(true)
 
       let submissionIdToUse = submissionId
-      
       if (!submissionId) {
-        // Generate a unique submission ID for new submission
         submissionIdToUse = `TP-${Date.now()}-${uuidv4().substring(0, 8).toUpperCase()}`
       }
 
-      // Determine status based on which tab is active
       let status = "Pending"
       let nextDepartment = "CSU"
-      
       if (activeTab === "practitioner-info") {
         status = "Practitioner Info Submitted"
         nextDepartment = "Director"
@@ -191,7 +179,6 @@ export default function ThirdPartySubmissionForm() {
         nextDepartment = "Director"
       }
 
-      // Upload files to Firebase Storage
       const fileUploads = await Promise.all([
         files.eiaReport ? uploadFileToStorage(files.eiaReport, `submissions/${submissionIdToUse}/eia`) : null,
         files.soilTestReport ? uploadFileToStorage(files.soilTestReport, `submissions/${submissionIdToUse}/soil`) : null,
@@ -199,15 +186,14 @@ export default function ThirdPartySubmissionForm() {
         files.structuralEngineeringDrawings ? uploadFileToStorage(files.structuralEngineeringDrawings, `submissions/${submissionIdToUse}/drawings`) : null,
         files.practitionerLicense ? uploadFileToStorage(files.practitionerLicense, `submissions/${submissionIdToUse}/license`) : null,
         files.companyRegistration ? uploadFileToStorage(files.companyRegistration, `submissions/${submissionIdToUse}/registration`) : null,
-      ]);
+      ])
 
-      const [eiaUrl, soilUrl, paymentUrl, drawingsUrl, licenseUrl, registrationUrl] = fileUploads;
+      const [eiaUrl, soilUrl, paymentUrl, drawingsUrl, licenseUrl, registrationUrl] = fileUploads
 
-      // Prepare submission data for Firestore
       const submissionData = {
         ...values,
         submissionId: submissionIdToUse,
-        status: status,
+        status,
         isFirstParty: false,
         department: nextDepartment,
         priority: "medium",
@@ -223,22 +209,21 @@ export default function ThirdPartySubmissionForm() {
         },
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
-        currentStep: activeTab === "applicant-info" ? 1 : 
-                    activeTab === "signage-details" ? 2 :
-                    activeTab === "company-info" ? 3 :
-                    activeTab === "practitioner-info" ? 4 : 5
+        currentStep:
+          activeTab === "applicant-info" ? 1
+          : activeTab === "signage-details" ? 2
+          : activeTab === "company-info" ? 3
+          : activeTab === "practitioner-info" ? 4
+          : 5,
       }
 
       if (existingSubmission) {
-        // Update existing submission
         const submissionRef = doc(db, "thirdPartySubmissions", existingSubmission.id)
         await updateDoc(submissionRef, submissionData)
       } else {
-        // Add new document to Firestore
-        await addDoc(collection(db, "thirdPartySubmissions"), submissionData);
+        await addDoc(collection(db, "thirdPartySubmissions"), submissionData)
       }
 
-      // Create notification
       await addDoc(collection(db, "notifications"), {
         userId: nextDepartment === "CSU" ? "csu_department" : "director_office",
         content: `New third-party application from ${values.applicantName}`,
@@ -246,14 +231,13 @@ export default function ThirdPartySubmissionForm() {
         referenceId: submissionIdToUse,
         isRead: false,
         createdAt: serverTimestamp(),
-      });
+      })
 
       toast({
         title: "Submission Successful",
         description: `Your application has been submitted successfully. Your submission ID is: ${submissionIdToUse}`,
       })
 
-      // Redirect to success page with the submission ID
       router.push(`/submission-success?id=${submissionIdToUse}`)
     } catch (error) {
       console.error("Error submitting form:", error)
@@ -271,14 +255,12 @@ export default function ThirdPartySubmissionForm() {
     if (activeTab === "applicant-info") setActiveTab("signage-details")
     else if (activeTab === "signage-details") setActiveTab("company-info")
     else if (activeTab === "company-info") {
-      // Check if this is initial submission or update
       if (!existingSubmission || existingSubmission.status === "Site Visit Completed") {
         setActiveTab("practitioner-info")
       } else {
         setActiveTab("documents")
       }
-    }
-    else if (activeTab === "practitioner-info") setActiveTab("documents")
+    } else if (activeTab === "practitioner-info") setActiveTab("documents")
   }
 
   const prevTab = () => {
@@ -290,17 +272,11 @@ export default function ThirdPartySubmissionForm() {
 
   const isTabLocked = (tabName: string) => {
     if (!existingSubmission) {
-      // New submission - only allow first three tabs
       return tabName === "practitioner-info" || tabName === "documents"
     }
-    
-    // Existing submission - check status
     if (existingSubmission.status === "Pending" || existingSubmission.status === "Under Review") {
       return tabName === "practitioner-info" || tabName === "documents"
-    } else if (existingSubmission.status === "Site Visit Completed") {
-      return false // All tabs unlocked
     }
-    
     return false
   }
 
@@ -321,6 +297,7 @@ export default function ThirdPartySubmissionForm() {
               </div>
             </div>
           </CardHeader>
+
           <CardContent className="p-6">
             {isLoading ? (
               <div className="flex justify-center items-center py-12">
@@ -332,510 +309,187 @@ export default function ThirdPartySubmissionForm() {
                   <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
                     <TabsList className="grid w-full grid-cols-5 mb-8">
                       <TabsTrigger value="applicant-info" className="flex items-center gap-2">
-                        <User className="h-4 w-4" />
-                        Applicant
+                        <User className="h-4 w-4" />Applicant
                       </TabsTrigger>
                       <TabsTrigger value="signage-details" className="flex items-center gap-2">
-                        <MapPin className="h-4 w-4" />
-                        Signage
+                        <MapPin className="h-4 w-4" />Signage
                       </TabsTrigger>
                       <TabsTrigger value="company-info" className="flex items-center gap-2">
-                        <Building className="h-4 w-4" />
-                        Company
+                        <Building className="h-4 w-4" />Company
                       </TabsTrigger>
-                      <TabsTrigger 
-                        value="practitioner-info" 
-                        className="flex items-center gap-2"
-                        disabled={isTabLocked("practitioner-info")}
-                      >
+                      <TabsTrigger value="practitioner-info" className="flex items-center gap-2" disabled={isTabLocked("practitioner-info")}>
                         {isTabLocked("practitioner-info") && <Lock className="h-3 w-3" />}
-                        <Briefcase className="h-4 w-4" />
-                        Practitioner
+                        <Briefcase className="h-4 w-4" />Practitioner
                       </TabsTrigger>
-                      <TabsTrigger 
-                        value="documents" 
-                        className="flex items-center gap-2"
-                        disabled={isTabLocked("documents")}
-                      >
+                      <TabsTrigger value="documents" className="flex items-center gap-2" disabled={isTabLocked("documents")}>
                         {isTabLocked("documents") && <Lock className="h-3 w-3" />}
-                        <FileText className="h-4 w-4" />
-                        Documents
+                        <FileText className="h-4 w-4" />Documents
                       </TabsTrigger>
                     </TabsList>
 
+                    {/* ── Applicant Info ── */}
                     <TabsContent value="applicant-info" className="space-y-6">
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                        <FormField
-                          control={form.control}
-                          name="applicantName"
-                          render={({ field }) => (
-                            <FormItem>
-                              <FormLabel>Applicant Name *</FormLabel>
-                              <FormControl>
-                                <Input placeholder="Enter full name" {...field} />
-                              </FormControl>
-                              <FormMessage />
-                            </FormItem>
-                          )}
-                        />
-
-                        <FormField
-                          control={form.control}
-                          name="contactPhoneNumber"
-                          render={({ field }) => (
-                            <FormItem>
-                              <FormLabel>Contact Phone Number *</FormLabel>
-                              <FormControl>
-                                <Input placeholder="Enter phone number" {...field} />
-                              </FormControl>
-                              <FormMessage />
-                            </FormItem>
-                          )}
-                        />
-
-                        <FormField
-                          control={form.control}
-                          name="email"
-                          render={({ field }) => (
-                            <FormItem>
-                              <FormLabel>Email Address *</FormLabel>
-                              <FormControl>
-                                <Input placeholder="Enter email address" type="email" {...field} />
-                              </FormControl>
-                              <FormMessage />
-                            </FormItem>
-                          )}
-                        />
-
-                        <FormField
-                          control={form.control}
-                          name="addressLine1"
-                          render={({ field }) => (
-                            <FormItem>
-                              <FormLabel>Address Line 1 *</FormLabel>
-                              <FormControl>
-                                <Input placeholder="Enter address line 1" {...field} />
-                              </FormControl>
-                              <FormMessage />
-                            </FormItem>
-                          )}
-                        />
-
-                        <FormField
-                          control={form.control}
-                          name="addressLine2"
-                          render={({ field }) => (
-                            <FormItem className="md:col-span-2">
-                              <FormLabel>Address Line 2 (Optional)</FormLabel>
-                              <FormControl>
-                                <Input placeholder="Enter address line 2" {...field} />
-                              </FormControl>
-                              <FormMessage />
-                            </FormItem>
-                          )}
-                        />
+                        <FormField control={form.control} name="applicantName" render={({ field }) => (
+                          <FormItem><FormLabel>Applicant Name *</FormLabel><FormControl><Input placeholder="Enter full name" {...field} /></FormControl><FormMessage /></FormItem>
+                        )} />
+                        <FormField control={form.control} name="contactPhoneNumber" render={({ field }) => (
+                          <FormItem><FormLabel>Contact Phone Number *</FormLabel><FormControl><Input placeholder="Enter phone number" {...field} /></FormControl><FormMessage /></FormItem>
+                        )} />
+                        <FormField control={form.control} name="email" render={({ field }) => (
+                          <FormItem><FormLabel>Email Address *</FormLabel><FormControl><Input placeholder="Enter email address" type="email" {...field} /></FormControl><FormMessage /></FormItem>
+                        )} />
+                        <FormField control={form.control} name="addressLine1" render={({ field }) => (
+                          <FormItem><FormLabel>Address Line 1 *</FormLabel><FormControl><Input placeholder="Enter address line 1" {...field} /></FormControl><FormMessage /></FormItem>
+                        )} />
+                        <FormField control={form.control} name="addressLine2" render={({ field }) => (
+                          <FormItem className="md:col-span-2"><FormLabel>Address Line 2 (Optional)</FormLabel><FormControl><Input placeholder="Enter address line 2" {...field} /></FormControl><FormMessage /></FormItem>
+                        )} />
                       </div>
-
                       <div className="flex justify-end pt-4">
                         <Button type="button" onClick={nextTab} className="bg-green-600 hover:bg-green-700">
-                          Next: Signage Details
-                          <ChevronRight className="ml-2 h-4 w-4" />
+                          Next: Signage Details <ChevronRight className="ml-2 h-4 w-4" />
                         </Button>
                       </div>
                     </TabsContent>
 
+                    {/* ── Signage Details ── */}
                     <TabsContent value="signage-details" className="space-y-6">
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                        <FormField
-                          control={form.control}
-                          name="purposeOfApplication"
-                          render={({ field }) => (
-                            <FormItem>
-                              <FormLabel>Purpose of Application *</FormLabel>
-                              <Select onValueChange={field.onChange} defaultValue={field.value}>
-                                <FormControl>
-                                  <SelectTrigger>
-                                    <SelectValue placeholder="Select purpose" />
-                                  </SelectTrigger>
-                                </FormControl>
-                                <SelectContent>
-                                  <SelectItem value="New Sign">New Sign</SelectItem>
-                                  <SelectItem value="Upgrading of Existing Sign">Upgrading of Existing Sign</SelectItem>
-                                  <SelectItem value="Change of Existing Sign">Change of Existing Sign</SelectItem>
-                                </SelectContent>
-                              </Select>
-                              <FormMessage />
-                            </FormItem>
-                          )}
-                        />
-
-                        <FormField
-                          control={form.control}
-                          name="applicationType"
-                          render={({ field }) => (
-                            <FormItem>
-                              <FormLabel>Application Type *</FormLabel>
-                              <Select onValueChange={field.onChange} defaultValue={field.value}>
-                                <FormControl>
-                                  <SelectTrigger>
-                                    <SelectValue placeholder="Select application type" />
-                                  </SelectTrigger>
-                                </FormControl>
-                                <SelectContent>
-                                  <SelectItem value="Billboard">Billboard</SelectItem>
-                                  <SelectItem value="Gantry">Gantry</SelectItem>
-                                  <SelectItem value="Unipole">Unipole</SelectItem>
-                                  <SelectItem value="Wall Drape">Wall Drape</SelectItem>
-                                  <SelectItem value="Roof Sign">Roof Sign</SelectItem>
-                                </SelectContent>
-                              </Select>
-                              <FormMessage />
-                            </FormItem>
-                          )}
-                        />
-
-                        <FormField
-                          control={form.control}
-                          name="gpsCoordinates"
-                          render={({ field }) => (
-                            <FormItem>
-                              <FormLabel>GPS Coordinates *</FormLabel>
-                              <FormControl>
-                                <Input placeholder="Enter GPS coordinates" {...field} />
-                              </FormControl>
-                              <FormDescription>Format: Latitude, Longitude (e.g., 9.0765, 7.3986)</FormDescription>
-                              <FormMessage />
-                            </FormItem>
-                          )}
-                        />
-
-                        <FormField
-                          control={form.control}
-                          name="structureDuration"
-                          render={({ field }) => (
-                            <FormItem>
-                              <FormLabel>Structure Duration *</FormLabel>
-                              <Select onValueChange={field.onChange} defaultValue={field.value}>
-                                <FormControl>
-                                  <SelectTrigger>
-                                    <SelectValue placeholder="Select duration" />
-                                  </SelectTrigger>
-                                </FormControl>
-                                <SelectContent>
-                                  <SelectItem value="Temporary">Temporary</SelectItem>
-                                  <SelectItem value="Permanent">Permanent</SelectItem>
-                                </SelectContent>
-                              </Select>
-                              <FormMessage />
-                            </FormItem>
-                          )}
-                        />
-
-                        <FormField
-                          control={form.control}
-                          name="numberOfSigns"
-                          render={({ field }) => (
-                            <FormItem>
-                              <FormLabel>Number of Signs *</FormLabel>
-                              <FormControl>
-                                <Input placeholder="Enter number of signs" type="number" {...field} />
-                              </FormControl>
-                              <FormMessage />
-                            </FormItem>
-                          )}
-                        />
-
-                        <FormField
-                          control={form.control}
-                          name="typeOfSign"
-                          render={({ field }) => (
-                            <FormItem>
-                              <FormLabel>Type of Sign *</FormLabel>
-                              <Select onValueChange={field.onChange} defaultValue={field.value}>
-                                <FormControl>
-                                  <SelectTrigger>
-                                    <SelectValue placeholder="Select sign type" />
-                                  </SelectTrigger>
-                                </FormControl>
-                                <SelectContent>
-                                  <SelectItem value="Static">Static</SelectItem>
-                                  <SelectItem value="Digital">Digital</SelectItem>
-                                  <SelectItem value="LED">LED</SelectItem>
-                                  <SelectItem value="Scrolling">Scrolling</SelectItem>
-                                </SelectContent>
-                              </Select>
-                              <FormMessage />
-                            </FormItem>
-                          )}
-                        />
-
-                        <FormField
-                          control={form.control}
-                          name="signDimensions"
-                          render={({ field }) => (
-                            <FormItem>
-                              <FormLabel>Sign Dimensions *</FormLabel>
-                              <FormControl>
-                                <Input placeholder="Enter dimensions (e.g., 4m x 6m)" {...field} />
-                              </FormControl>
-                              <FormMessage />
-                            </FormItem>
-                          )}
-                        />
-
-                        <FormField
-                          control={form.control}
-                          name="structuralHeight"
-                          render={({ field }) => (
-                            <FormItem>
-                              <FormLabel>Structural Height *</FormLabel>
-                              <FormControl>
-                                <Input placeholder="Enter height in meters" {...field} />
-                              </FormControl>
-                              <FormMessage />
-                            </FormItem>
-                          )}
-                        />
+                        <FormField control={form.control} name="purposeOfApplication" render={({ field }) => (
+                          <FormItem><FormLabel>Purpose of Application *</FormLabel>
+                            <Select onValueChange={field.onChange} defaultValue={field.value}>
+                              <FormControl><SelectTrigger><SelectValue placeholder="Select purpose" /></SelectTrigger></FormControl>
+                              <SelectContent>
+                                <SelectItem value="New Sign">New Sign</SelectItem>
+                                <SelectItem value="Upgrading of Existing Sign">Upgrading of Existing Sign</SelectItem>
+                                <SelectItem value="Change of Existing Sign">Change of Existing Sign</SelectItem>
+                              </SelectContent>
+                            </Select><FormMessage /></FormItem>
+                        )} />
+                        <FormField control={form.control} name="applicationType" render={({ field }) => (
+                          <FormItem><FormLabel>Application Type *</FormLabel>
+                            <Select onValueChange={field.onChange} defaultValue={field.value}>
+                              <FormControl><SelectTrigger><SelectValue placeholder="Select application type" /></SelectTrigger></FormControl>
+                              <SelectContent>
+                                <SelectItem value="Billboard">Billboard</SelectItem>
+                                <SelectItem value="Gantry">Gantry</SelectItem>
+                                <SelectItem value="Unipole">Unipole</SelectItem>
+                                <SelectItem value="Wall Drape">Wall Drape</SelectItem>
+                                <SelectItem value="Roof Sign">Roof Sign</SelectItem>
+                              </SelectContent>
+                            </Select><FormMessage /></FormItem>
+                        )} />
+                        <FormField control={form.control} name="gpsCoordinates" render={({ field }) => (
+                          <FormItem><FormLabel>GPS Coordinates *</FormLabel><FormControl><Input placeholder="Enter GPS coordinates" {...field} /></FormControl>
+                            <FormDescription>Format: Latitude, Longitude (e.g., 9.0765, 7.3986)</FormDescription><FormMessage /></FormItem>
+                        )} />
+                        <FormField control={form.control} name="structureDuration" render={({ field }) => (
+                          <FormItem><FormLabel>Structure Duration *</FormLabel>
+                            <Select onValueChange={field.onChange} defaultValue={field.value}>
+                              <FormControl><SelectTrigger><SelectValue placeholder="Select duration" /></SelectTrigger></FormControl>
+                              <SelectContent>
+                                <SelectItem value="Temporary">Temporary</SelectItem>
+                                <SelectItem value="Permanent">Permanent</SelectItem>
+                              </SelectContent>
+                            </Select><FormMessage /></FormItem>
+                        )} />
+                        <FormField control={form.control} name="numberOfSigns" render={({ field }) => (
+                          <FormItem><FormLabel>Number of Signs *</FormLabel><FormControl><Input placeholder="Enter number of signs" type="number" {...field} /></FormControl><FormMessage /></FormItem>
+                        )} />
+                        <FormField control={form.control} name="typeOfSign" render={({ field }) => (
+                          <FormItem><FormLabel>Type of Sign *</FormLabel>
+                            <Select onValueChange={field.onChange} defaultValue={field.value}>
+                              <FormControl><SelectTrigger><SelectValue placeholder="Select sign type" /></SelectTrigger></FormControl>
+                              <SelectContent>
+                                <SelectItem value="Static">Static</SelectItem>
+                                <SelectItem value="Digital">Digital</SelectItem>
+                                <SelectItem value="LED">LED</SelectItem>
+                                <SelectItem value="Scrolling">Scrolling</SelectItem>
+                              </SelectContent>
+                            </Select><FormMessage /></FormItem>
+                        )} />
+                        <FormField control={form.control} name="signDimensions" render={({ field }) => (
+                          <FormItem><FormLabel>Sign Dimensions *</FormLabel><FormControl><Input placeholder="Enter dimensions (e.g., 4m x 6m)" {...field} /></FormControl><FormMessage /></FormItem>
+                        )} />
+                        <FormField control={form.control} name="structuralHeight" render={({ field }) => (
+                          <FormItem><FormLabel>Structural Height *</FormLabel><FormControl><Input placeholder="Enter height in meters" {...field} /></FormControl><FormMessage /></FormItem>
+                        )} />
                       </div>
-
                       <div className="flex justify-between pt-4">
-                        <Button type="button" variant="outline" onClick={prevTab}>
-                          <ChevronLeft className="mr-2 h-4 w-4" />
-                          Previous
-                        </Button>
-                        <Button type="button" onClick={nextTab} className="bg-green-600 hover:bg-green-700">
-                          Next: Company Information
-                          <ChevronRight className="ml-2 h-4 w-4" />
-                        </Button>
+                        <Button type="button" variant="outline" onClick={prevTab}><ChevronLeft className="mr-2 h-4 w-4" />Previous</Button>
+                        <Button type="button" onClick={nextTab} className="bg-green-600 hover:bg-green-700">Next: Company Information <ChevronRight className="ml-2 h-4 w-4" /></Button>
                       </div>
                     </TabsContent>
 
+                    {/* ── Company Info ── */}
                     <TabsContent value="company-info" className="space-y-6">
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                        <FormField
-                          control={form.control}
-                          name="companyName"
-                          render={({ field }) => (
-                            <FormItem>
-                              <FormLabel>Company Name *</FormLabel>
-                              <FormControl>
-                                <Input placeholder="Enter company name" {...field} />
-                              </FormControl>
-                              <FormMessage />
-                            </FormItem>
-                          )}
-                        />
-
-                        <FormField
-                          control={form.control}
-                          name="companyRegistrationNumber"
-                          render={({ field }) => (
-                            <FormItem>
-                              <FormLabel>Company Registration Number *</FormLabel>
-                              <FormControl>
-                                <Input placeholder="Enter registration number" {...field} />
-                              </FormControl>
-                              <FormMessage />
-                          </FormItem>
-                          )}
-                        />
-
-                        <FormField
-                          control={form.control}
-                          name="companyAddress"
-                          render={({ field }) => (
-                            <FormItem className="md:col-span-2">
-                              <FormLabel>Company Address *</FormLabel>
-                              <FormControl>
-                                <Textarea placeholder="Enter company address" {...field} />
-                              </FormControl>
-                              <FormMessage />
-                            </FormItem>
-                          )}
-                        />
+                        <FormField control={form.control} name="companyName" render={({ field }) => (
+                          <FormItem><FormLabel>Company Name *</FormLabel><FormControl><Input placeholder="Enter company name" {...field} /></FormControl><FormMessage /></FormItem>
+                        )} />
+                        <FormField control={form.control} name="companyRegistrationNumber" render={({ field }) => (
+                          <FormItem><FormLabel>Company Registration Number *</FormLabel><FormControl><Input placeholder="Enter registration number" {...field} /></FormControl><FormMessage /></FormItem>
+                        )} />
+                        <FormField control={form.control} name="companyAddress" render={({ field }) => (
+                          <FormItem className="md:col-span-2"><FormLabel>Company Address *</FormLabel><FormControl><Textarea placeholder="Enter company address" {...field} /></FormControl><FormMessage /></FormItem>
+                        )} />
                       </div>
-
                       <div className="flex justify-between pt-4">
-                        <Button type="button" variant="outline" onClick={prevTab}>
-                          <ChevronLeft className="mr-2 h-4 w-4" />
-                          Previous
-                        </Button>
+                        <Button type="button" variant="outline" onClick={prevTab}><ChevronLeft className="mr-2 h-4 w-4" />Previous</Button>
                         <Button type="button" onClick={nextTab} className="bg-green-600 hover:bg-green-700">
-                          {existingSubmission && existingSubmission.status === "Site Visit Completed" 
-                            ? "Next: Practitioner Information" 
-                            : "Submit Initial Application"}
+                          {existingSubmission?.status === "Site Visit Completed" ? "Next: Practitioner Information" : "Submit Initial Application"}
                           <ChevronRight className="ml-2 h-4 w-4" />
                         </Button>
                       </div>
                     </TabsContent>
 
+                    {/* ── Practitioner Info ── */}
                     <TabsContent value="practitioner-info" className="space-y-6">
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                        <FormField
-                          control={form.control}
-                          name="practitionerName"
-                          render={({ field }) => (
-                            <FormItem>
-                              <FormLabel>Practitioner Name *</FormLabel>
-                              <FormControl>
-                                <Input placeholder="Enter practitioner's full name" {...field} />
-                              </FormControl>
-                              <FormMessage />
-                            </FormItem>
-                          )}
-                        />
-
-                        <FormField
-                          control={form.control}
-                          name="practitionerLicenseNumber"
-                          render={({ field }) => (
-                            <FormItem>
-                              <FormLabel>Practitioner License Number *</FormLabel>
-                              <FormControl>
-                                <Input placeholder="Enter license number" {...field} />
-                              </FormControl>
-                              <FormMessage />
-                            </FormItem>
-                          )}
-                        />
+                        <FormField control={form.control} name="practitionerName" render={({ field }) => (
+                          <FormItem><FormLabel>Practitioner Name *</FormLabel><FormControl><Input placeholder="Enter practitioner's full name" {...field} /></FormControl><FormMessage /></FormItem>
+                        )} />
+                        <FormField control={form.control} name="practitionerLicenseNumber" render={({ field }) => (
+                          <FormItem><FormLabel>Practitioner License Number *</FormLabel><FormControl><Input placeholder="Enter license number" {...field} /></FormControl><FormMessage /></FormItem>
+                        )} />
                       </div>
-
                       <div className="flex justify-between pt-4">
-                        <Button type="button" variant="outline" onClick={prevTab}>
-                          <ChevronLeft className="mr-2 h-4 w-4" />
-                          Previous
-                        </Button>
-                        <Button type="button" onClick={nextTab} className="bg-green-600 hover:bg-green-700">
-                          Next: Required Documents
-                          <ChevronRight className="ml-2 h-4 w-4" />
-                        </Button>
+                        <Button type="button" variant="outline" onClick={prevTab}><ChevronLeft className="mr-2 h-4 w-4" />Previous</Button>
+                        <Button type="button" onClick={nextTab} className="bg-green-600 hover:bg-green-700">Next: Required Documents <ChevronRight className="ml-2 h-4 w-4" /></Button>
                       </div>
                     </TabsContent>
 
+                    {/* ── Documents ── */}
                     <TabsContent value="documents" className="space-y-6">
                       <div className="grid grid-cols-1 gap-6">
                         <div className="space-y-4">
                           <h3 className="text-lg font-semibold text-slate-900">Required Documents</h3>
-                          <p className="text-sm text-slate-600">
-                            Please upload all required documents. All documents should be in PDF format and not exceed 10MB each.
-                          </p>
+                          <p className="text-sm text-slate-600">Please upload all required documents. All documents should be in PDF format and not exceed 10MB each.</p>
                         </div>
-
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                          <div className="space-y-2">
-                            <Label htmlFor="eiaReport" className="text-sm font-medium">
-                              Environmental Impact Assessment (EIA) Report *
-                            </Label>
-                            <Input
-                              id="eiaReport"
-                              type="file"
-                              accept=".pdf,.doc,.docx"
-                              onChange={(e) => handleFileChange(e, "eiaReport")}
-                              className="mt-1"
-                            />
-                            {files.eiaReport && (
-                              <p className="text-sm text-green-600 mt-1">Selected: {files.eiaReport.name}</p>
-                            )}
-                          </div>
-
-                          <div className="space-y-2">
-                            <Label htmlFor="soilTestReport" className="text-sm font-medium">
-                              Soil Test Report *
-                            </Label>
-                            <Input
-                              id="soilTestReport"
-                              type="file"
-                              accept=".pdf,.doc,.docx"
-                              onChange={(e) => handleFileChange(e, "soilTestReport")}
-                              className="mt-1"
-                            />
-                            {files.soilTestReport && (
-                              <p className="text-sm text-green-600 mt-1">Selected: {files.soilTestReport.name}</p>
-                            )}
-                          </div>
-
-                          <div className="space-y-2">
-                            <Label htmlFor="proofOfPayment" className="text-sm font-medium">
-                              Proof of Payment *
-                            </Label>
-                            <Input
-                              id="proofOfPayment"
-                              type="file"
-                              accept=".pdf,.jpg,.jpeg,.png"
-                              onChange={(e) => handleFileChange(e, "proofOfPayment")}
-                              className="mt-1"
-                            />
-                            {files.proofOfPayment && (
-                              <p className="text-sm text-green-600 mt-1">Selected: {files.proofOfPayment.name}</p>
-                            )}
-                          </div>
-
-                          <div className="space-y-2">
-                            <Label htmlFor="structuralEngineeringDrawings" className="text-sm font-medium">
-                              Structural Engineering Drawings *
-                            </Label>
-                            <Input
-                              id="structuralEngineeringDrawings"
-                              type="file"
-                              accept=".pdf,.dwg,.dxf"
-                              onChange={(e) => handleFileChange(e, "structuralEngineeringDrawings")}
-                              className="mt-1"
-                            />
-                            {files.structuralEngineeringDrawings && (
-                              <p className="text-sm text-green-600 mt-1">
-                                Selected: {files.structuralEngineeringDrawings.name}
-                              </p>
-                            )}
-                          </div>
-
-                          <div className="space-y-2">
-                            <Label htmlFor="practitionerLicense" className="text-sm font-medium">
-                              Practitioner License *
-                            </Label>
-                            <Input
-                              id="practitionerLicense"
-                              type="file"
-                              accept=".pdf,.jpg,.jpeg,.png"
-                              onChange={(e) => handleFileChange(e, "practitionerLicense")}
-                              className="mt-1"
-                            />
-                            {files.practitionerLicense && (
-                              <p className="text-sm text-green-600 mt-1">Selected: {files.practitionerLicense.name}</p>
-                            )}
-                          </div>
-
-                          <div className="space-y-2">
-                            <Label htmlFor="companyRegistration" className="text-sm font-medium">
-                              Company Registration Certificate *
-                            </Label>
-                            <Input
-                              id="companyRegistration"
-                              type="file"
-                              accept=".pdf,.jpg,.jpeg,.png"
-                              onChange={(e) => handleFileChange(e, "companyRegistration")}
-                              className="mt-1"
-                            />
-                            {files.companyRegistration && (
-                              <p className="text-sm text-green-600 mt-1">Selected: {files.companyRegistration.name}</p>
-                            )}
-                          </div>
+                          {[
+                            { id: "eiaReport", label: "Environmental Impact Assessment (EIA) Report *", accept: ".pdf,.doc,.docx" },
+                            { id: "soilTestReport", label: "Soil Test Report *", accept: ".pdf,.doc,.docx" },
+                            { id: "proofOfPayment", label: "Proof of Payment *", accept: ".pdf,.jpg,.jpeg,.png" },
+                            { id: "structuralEngineeringDrawings", label: "Structural Engineering Drawings *", accept: ".pdf,.dwg,.dxf" },
+                            { id: "practitionerLicense", label: "Practitioner License *", accept: ".pdf,.jpg,.jpeg,.png" },
+                            { id: "companyRegistration", label: "Company Registration Certificate *", accept: ".pdf,.jpg,.jpeg,.png" },
+                          ].map(({ id, label, accept }) => (
+                            <div key={id} className="space-y-2">
+                              <Label htmlFor={id} className="text-sm font-medium">{label}</Label>
+                              <Input id={id} type="file" accept={accept} onChange={(e) => handleFileChange(e, id)} className="mt-1" />
+                              {files[id] && <p className="text-sm text-green-600 mt-1">Selected: {files[id]!.name}</p>}
+                            </div>
+                          ))}
                         </div>
                       </div>
-
                       <div className="flex justify-between pt-4">
-                        <Button type="button" variant="outline" onClick={prevTab}>
-                          <ChevronLeft className="mr-2 h-4 w-4" />
-                          Previous
-                        </Button>
+                        <Button type="button" variant="outline" onClick={prevTab}><ChevronLeft className="mr-2 h-4 w-4" />Previous</Button>
                         <Button type="submit" disabled={isSubmitting} className="bg-green-600 hover:bg-green-700">
                           {isSubmitting ? (
-                            <>
-                              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
-                              Submitting...
-                            </>
-                          ) : (
-                            "Submit Application"
-                          )}
+                            <><div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>Submitting...</>
+                          ) : "Submit Application"}
                         </Button>
                       </div>
                     </TabsContent>
@@ -844,14 +498,28 @@ export default function ThirdPartySubmissionForm() {
               </Form>
             )}
           </CardContent>
+
           <CardFooter className="bg-slate-50 border-t px-6 py-4">
             <p className="text-sm text-slate-600">
-              <span className="font-medium">Note:</span> All fields marked with * are required. 
+              <span className="font-medium">Note:</span> All fields marked with * are required.
               Your submission ID will be generated upon successful submission.
             </p>
           </CardFooter>
         </Card>
       </div>
     </div>
+  )
+}
+
+// ── Page export: wraps the form in Suspense to satisfy Next.js ─────────────
+export default function ThirdPartySubmissionForm() {
+  return (
+    <Suspense fallback={
+      <div className="min-h-screen bg-gradient-to-br from-slate-50 to-green-50 flex items-center justify-center">
+        <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-green-600" />
+      </div>
+    }>
+      <ThirdPartyForm />
+    </Suspense>
   )
 }

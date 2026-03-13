@@ -10,16 +10,13 @@ import { Label } from "@/components/ui/label"
 import { Badge } from "@/components/ui/badge"
 import { Loader2, CheckCircle, XCircle, Clock, AlertCircle, Search, Home, FileText, Upload, DollarSign } from "lucide-react"
 import Link from "next/link"
-import { initializeApp } from "firebase/app"
-import { getFirestore, collection, query, where, getDocs, updateDoc, doc, arrayUnion, addDoc } from "firebase/firestore"
+import { collection, query, where, getDocs, updateDoc, doc, arrayUnion, addDoc } from "firebase/firestore"
 import { getStorage, ref, uploadBytes, getDownloadURL } from "firebase/storage"
 import { v4 as uuidv4 } from "uuid"
-
 import { db } from "@/lib/firebase"
 
-// Initialize Firebase
-
 const storage = getStorage()
+
 export default function SubmissionStatus() {
   const router = useRouter()
   const [submissionId, setSubmissionId] = useState("")
@@ -40,7 +37,7 @@ export default function SubmissionStatus() {
     setSubmission(null)
 
     try {
-      // Check in submissions collection
+      // First, check in the main submissions collection
       const q = query(
         collection(db, "submissions"), 
         where("submissionId", "==", submissionId.trim())
@@ -49,19 +46,32 @@ export default function SubmissionStatus() {
       const querySnapshot = await getDocs(q)
       
       if (querySnapshot.empty) {
-        // Check in specific collections
-        const collections = ["firstPartySubmissions", "thirdPartySubmissions", "meetingRequests"]
+        // Check in specific collections with different ID field names
+        const collections = [
+          { name: "firstPartySubmissions", idField: "submissionId" },
+          { name: "thirdPartySubmissions", idField: "submissionId" },
+          { name: "meetingRequests", idField: "requestId" }
+        ]
+        
         let foundSubmission = null
         let collectionName = ""
 
         for (const coll of collections) {
-          const collQuery = query(collection(db, coll), where("submissionId", "==", submissionId.trim()))
+          const collQuery = query(
+            collection(db, coll.name), 
+            where(coll.idField, "==", submissionId.trim())
+          )
           const collSnapshot = await getDocs(collQuery)
+          
           if (!collSnapshot.empty) {
             foundSubmission = collSnapshot.docs[0].data()
             foundSubmission.id = collSnapshot.docs[0].id
-            foundSubmission.collection = coll
-            collectionName = coll
+            foundSubmission.collection = coll.name
+            foundSubmission.type = coll.name === "meetingRequests" ? "meeting" : "application"
+            
+            // Add the ID field name for reference
+            foundSubmission.idField = coll.idField
+            collectionName = coll.name
             break
           }
         }
@@ -76,7 +86,9 @@ export default function SubmissionStatus() {
         setSubmission({
           ...submissionData,
           id: querySnapshot.docs[0].id,
-          collection: "submissions"
+          collection: "submissions",
+          type: "application",
+          idField: "submissionId"
         })
       }
     } catch (err) {
@@ -93,8 +105,11 @@ export default function SubmissionStatus() {
     try {
       setUploadingPayment(true)
 
+      // Get the correct ID field
+      const idValue = submission.submissionId || submission.requestId
+      
       // Upload payment proof
-      const filePath = `payments/${submission.submissionId}/${uuidv4()}_${paymentFile.name}`
+      const filePath = `payments/${idValue}/${uuidv4()}_${paymentFile.name}`
       const storageRef = ref(storage, filePath)
       await uploadBytes(storageRef, paymentFile)
       const downloadURL = await getDownloadURL(storageRef)
@@ -103,52 +118,74 @@ export default function SubmissionStatus() {
       const submissionRef = doc(db, submission.collection, submission.id)
       const now = new Date().toISOString()
 
-      await updateDoc(submissionRef, {
+      // Prepare update data based on collection type
+      const updateData: any = {
         paymentProof: downloadURL,
         paymentStatus: "Paid",
         status: "Payment Verified",
         department: "Director",
-        comments: arrayUnion({
+        updatedAt: now,
+      }
+
+      // Add comments if the field exists
+      if (submission.comments !== undefined) {
+        updateData.comments = arrayUnion({
           text: "Payment proof uploaded by applicant",
           timestamp: now,
           action: "Payment submitted",
-        }),
-        updatedAt: now,
-      })
+        })
+      }
 
-      // Log activity
-      await addDoc(collection(db, "activityLogs"), {
-        submissionId: submission.id,
-        action: "Payment proof uploaded",
-        timestamp: now,
-        userId: "applicant",
-      })
+      await updateDoc(submissionRef, updateData)
+
+      // Log activity (if the collection exists)
+      try {
+        await addDoc(collection(db, "activityLogs"), {
+          submissionId: submission.id,
+          action: "Payment proof uploaded",
+          timestamp: now,
+          userId: "applicant",
+        })
+      } catch (logError) {
+        console.log("Activity log not created (optional)")
+      }
 
       // Create notification for Director
-      await addDoc(collection(db, "notifications"), {
-        userId: "director",
-        content: `Payment proof uploaded for ${submission.applicantName}`,
-        type: "info",
-        referenceId: submission.id,
-        isRead: false,
-        createdAt: now,
-      })
+      try {
+        await addDoc(collection(db, "notifications"), {
+          userId: "director",
+          content: `Payment proof uploaded for ${submission.fullName || submission.applicantName}`,
+          type: "info",
+          referenceId: submission.id,
+          isRead: false,
+          createdAt: now,
+        })
+      } catch (notifError) {
+        console.log("Notification not created (optional)")
+      }
 
       // Refresh submission data
-      checkStatus()
+      await checkStatus()
       setPaymentFile(null)
       
-      alert("Payment proof uploaded successfully!")
+      toast({
+        title: "Success",
+        description: "Payment proof uploaded successfully!",
+      })
     } catch (err) {
       console.error("Error uploading payment:", err)
-      alert("Failed to upload payment proof. Please try again.")
+      toast({
+        title: "Error",
+        description: "Failed to upload payment proof. Please try again.",
+        variant: "destructive",
+      })
     } finally {
       setUploadingPayment(false)
     }
   }
 
   const getStatusBadge = (status: string) => {
-    const statusLower = status.toLowerCase()
+    const statusLower = status?.toLowerCase() || ""
     
     switch (statusLower) {
       case "approved":
@@ -194,8 +231,8 @@ export default function SubmissionStatus() {
     }
   }
 
-  const getStatusMessage = (status: string, type: string) => {
-    const statusLower = status.toLowerCase()
+  const getStatusMessage = (status: string, type: string = "application") => {
+    const statusLower = status?.toLowerCase() || ""
     
     if (statusLower === "payment pending") {
       return "Your invoice has been generated. Please make payment and upload proof below."
@@ -213,7 +250,7 @@ export default function SubmissionStatus() {
         case "under review":
           return "Your meeting request is currently under review by our Customer Service Unit."
         default:
-          return "Your request is being processed."
+          return "Your meeting request is being processed."
       }
     } else {
       switch (statusLower) {
@@ -233,7 +270,7 @@ export default function SubmissionStatus() {
   }
 
   const getStatusColor = (status: string) => {
-    const statusLower = status.toLowerCase()
+    const statusLower = status?.toLowerCase() || ""
     
     switch (statusLower) {
       case "approved":
@@ -254,6 +291,24 @@ export default function SubmissionStatus() {
     }
   }
 
+  const getApplicantName = (submission: any) => {
+    return submission.fullName || submission.applicantName || "N/A"
+  }
+
+  const getCompanyName = (submission: any) => {
+    return submission.organization || submission.companyName || null
+  }
+
+  const getSubmissionId = (submission: any) => {
+    return submission.submissionId || submission.requestId || "N/A"
+  }
+
+  // Add this missing toast function
+  const toast = ({ title, description, variant }: { title: string; description: string; variant?: "destructive" }) => {
+    // You can implement this with your actual toast library
+    alert(`${title}: ${description}`);
+  }
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-blue-50 py-8">
       <div className="container mx-auto px-4">
@@ -266,7 +321,7 @@ export default function SubmissionStatus() {
               <div>
                 <CardTitle className="text-2xl">Check Submission Status</CardTitle>
                 <CardDescription className="text-blue-100">
-                  Enter your submission ID to track the status of your application
+                  Enter your submission ID to track the status of your application or meeting request
                 </CardDescription>
               </div>
             </div>
@@ -274,14 +329,14 @@ export default function SubmissionStatus() {
           <CardContent className="p-6 space-y-6">
             <div className="space-y-4">
               <Label htmlFor="submissionId" className="text-lg font-medium">
-                Submission ID
+                Submission / Request ID
               </Label>
               <div className="flex gap-3">
                 <Input
                   id="submissionId"
                   value={submissionId}
                   onChange={(e) => setSubmissionId(e.target.value)}
-                  placeholder="Enter your submission ID"
+                  placeholder="Enter your submission or request ID"
                   className="flex-1 text-lg py-6"
                   onKeyPress={(e) => e.key === 'Enter' && checkStatus()}
                 />
@@ -320,10 +375,12 @@ export default function SubmissionStatus() {
                 <div className={`p-6 rounded-lg border-2 ${getStatusColor(submission.status)}`}>
                   <div className="flex justify-between items-start mb-4">
                     <div>
-                      <h3 className="text-xl font-bold mb-2">Application Details</h3>
-                      <p className="text-lg font-semibold">{submission.applicantName}</p>
-                      {submission.companyName && (
-                        <p className="text-sm text-slate-600">{submission.companyName}</p>
+                      <h3 className="text-xl font-bold mb-2">
+                        {submission.type === "meeting" ? "Meeting Request Details" : "Application Details"}
+                      </h3>
+                      <p className="text-lg font-semibold">{getApplicantName(submission)}</p>
+                      {getCompanyName(submission) && (
+                        <p className="text-sm text-slate-600">{getCompanyName(submission)}</p>
                       )}
                     </div>
                     {getStatusBadge(submission.status)}
@@ -331,22 +388,80 @@ export default function SubmissionStatus() {
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
                     <div>
-                      <p className="text-sm font-medium text-slate-600">Submission ID</p>
-                      <p className="font-mono font-bold">{submission.submissionId}</p>
+                      <p className="text-sm font-medium text-slate-600">ID</p>
+                      <p className="font-mono font-bold">{getSubmissionId(submission)}</p>
                     </div>
                     <div>
-                      <p className="text-sm font-medium text-slate-600">Application Type</p>
-                      <p className="font-medium">{submission.applicationType}</p>
+                      <p className="text-sm font-medium text-slate-600">Type</p>
+                      <p className="font-medium capitalize">
+                        {submission.type === "meeting" 
+                          ? "Meeting Request" 
+                          : submission.applicationType || submission.purposeOfApplication || "Application"}
+                      </p>
                     </div>
                     <div>
                       <p className="text-sm font-medium text-slate-600">Current Department</p>
-                      <p className="font-medium">{submission.department}</p>
+                      <p className="font-medium">{submission.department || "CSU"}</p>
                     </div>
                     <div>
                       <p className="text-sm font-medium text-slate-600">Status</p>
                       <p className="font-medium">{submission.status}</p>
                     </div>
                   </div>
+
+                  {/* Purpose/Purpose of Meeting */}
+                  {(submission.purpose || submission.description || submission.purposeOfApplication) && (
+                    <div className="mb-4">
+                      <p className="text-sm font-medium text-slate-600 mb-1">Purpose</p>
+                      <p className="p-3 bg-white/50 rounded-lg">
+                        {submission.purpose || submission.description || submission.purposeOfApplication}
+                      </p>
+                    </div>
+                  )}
+
+                  {/* Meeting-specific fields */}
+                  {submission.type === "meeting" && submission.preferredDate && (
+                    <div className="grid grid-cols-2 gap-4 mb-4">
+                      <div>
+                        <p className="text-sm font-medium text-slate-600">Preferred Date</p>
+                        <p className="font-medium">{new Date(submission.preferredDate).toLocaleDateString()}</p>
+                      </div>
+                      <div>
+                        <p className="text-sm font-medium text-slate-600">Preferred Time</p>
+                        <p className="font-medium">{submission.preferredTime}</p>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* First Party specific fields */}
+                  {submission.collection === "firstPartySubmissions" && (
+                    <div className="grid grid-cols-2 gap-4 mb-4">
+                      {submission.numberOfSigns && (
+                        <div>
+                          <p className="text-sm font-medium text-slate-600">Number of Signs</p>
+                          <p className="font-medium">{submission.numberOfSigns}</p>
+                        </div>
+                      )}
+                      {submission.typeOfSign && (
+                        <div>
+                          <p className="text-sm font-medium text-slate-600">Type of Sign</p>
+                          <p className="font-medium">{submission.typeOfSign}</p>
+                        </div>
+                      )}
+                      {submission.signDimensions && (
+                        <div>
+                          <p className="text-sm font-medium text-slate-600">Sign Dimensions</p>
+                          <p className="font-medium">{submission.signDimensions}</p>
+                        </div>
+                      )}
+                      {submission.structuralHeight && (
+                        <div>
+                          <p className="text-sm font-medium text-slate-600">Structural Height</p>
+                          <p className="font-medium">{submission.structuralHeight}</p>
+                        </div>
+                      )}
+                    </div>
+                  )}
 
                   <div className="p-4 rounded-lg bg-white/50">
                     <p className="font-medium">
@@ -429,7 +544,7 @@ export default function SubmissionStatus() {
                 <div className="bg-slate-50 p-4 rounded-lg">
                   <h4 className="font-semibold mb-2">Next Steps</h4>
                   <ul className="text-sm text-slate-700 space-y-1">
-                    <li>• Keep your submission ID safe for future reference</li>
+                    <li>• Keep your {submission.type === "meeting" ? "request" : "submission"} ID safe for future reference</li>
                     <li>• Check back regularly for status updates</li>
                     <li>• Contact our office if you have any questions</li>
                     <li>• You will receive email notifications for important updates</li>
@@ -445,7 +560,7 @@ export default function SubmissionStatus() {
                 Return to Home
               </Link>
             </Button>
-            {submission && (
+            {submission && submission.type !== "meeting" && (
               <Button asChild>
                 <Link href={`/submissions/${submission.isFirstParty ? 'first-party' : 'third-party'}?id=${submission.submissionId}`}>
                   <FileText className="mr-2 h-4 w-4" />

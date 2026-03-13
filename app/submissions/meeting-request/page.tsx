@@ -14,14 +14,11 @@ import { Textarea } from "@/components/ui/textarea"
 import { useToast } from "@/components/ui/use-toast"
 import { Form, FormControl, FormDescription, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { initializeApp } from "firebase/app"
-import { getFirestore, collection, addDoc, serverTimestamp } from "firebase/firestore"
 import { getStorage, ref, uploadBytes, getDownloadURL } from "firebase/storage"
 import { v4 as uuidv4 } from "uuid"
 import { Calendar, User, Mail, Phone, Building, FileText } from "lucide-react"
 import { db } from "@/lib/firebase"
-
-// Initialize Firebase
+import { collection, addDoc, serverTimestamp } from "firebase/firestore"
 
 const storage = getStorage()
 
@@ -86,15 +83,17 @@ export default function MeetingRequestForm() {
         documentUrl = await uploadFileToStorage(supportingDocument)
       }
 
-      // Create meeting request in Firestore
+      // Create meeting request in Firestore - REMOVE the supportingDocument field
+      const { supportingDocument: _, ...valuesWithoutDocument } = values; // Remove the file object from values
+
       const docRef = await addDoc(collection(db, "meetingRequests"), {
-        ...values,
+        ...valuesWithoutDocument, // Spread the filtered values
         requestId,
         status: "Pending",
         department: "CSU",
         title: `Meeting Request - ${values.fullName}`,
         description: values.purpose,
-        supportingDocumentUrl: documentUrl,
+        supportingDocumentUrl: documentUrl || null, // Store only the URL, not the file object
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
@@ -113,6 +112,10 @@ export default function MeetingRequestForm() {
         title: "Request Submitted Successfully",
         description: "Your meeting request has been submitted and will be reviewed by our Customer Service Unit.",
       })
+
+      // Reset form and file state
+      setSupportingDocument(null)
+      form.reset()
 
       // Redirect to success page with the request ID
       router.push(`/submission-success?id=${requestId}`)

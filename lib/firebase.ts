@@ -9,7 +9,7 @@ const firebaseConfig = {
   apiKey: "AIzaSyA3R15_tAiapTQcKc_6cL8nN_FPoWRDFI0",
   authDomain: "doas-771c4.firebaseapp.com",
   projectId: "doas-771c4",
-  storageBucket: "doas-771c4.appspot.com",
+  storageBucket: "doas-771c4.firebasestorage.app",
   messagingSenderId: "376823252081",
   appId: "1:376823252081:web:871302513d4da5fae107d0",
   measurementId: "G-5RM0N8JG2W"

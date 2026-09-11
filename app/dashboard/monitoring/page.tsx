@@ -1,239 +1,154 @@
 "use client"
 
-import { useState, useEffect } from "react"
-import { collection, getDocs, query, where } from "firebase/firestore"
-import { db } from "@/lib/firebase"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Button } from "@/components/ui/button"
-import { Badge } from "@/components/ui/badge"
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
-import { CheckCircle, Clock, Shield, AlertTriangle } from "lucide-react"
-import MonitoringHeader from "@/components/monitoring/monitoring-header"
-import SubmissionsTable from "@/components/monitoring/submissions-table"
-import ChatPanel from "@/components/shared/chat-panel"
-import TasksPanel from "@/components/shared/tasks-panel"
-import NotificationsPanel from "@/components/shared/notifications-panel"
-import CompliancePanel from "@/components/monitoring/compliance-panel"
-
-
-
-
+import * as React from "react"
+import {
+  Bell,
+  ClipboardCheck,
+  LayoutDashboard,
+  ListTodo,
+  MessagesSquare,
+  ScanSearch,
+  ShieldAlert,
+  ShieldCheck,
+} from "lucide-react"
+import { limit, orderBy } from "firebase/firestore"
+import { DEPARTMENT, STATUS, channelsFor, stage } from "@/lib/workflow"
+import { useRealtimeCollection } from "@/hooks/use-firestore"
+import { DashboardShell, type ShellNavItem } from "@/components/dashboard/shell"
+import { ChatPanel } from "@/components/dashboard/chat-panel"
+import { NotificationsPanel } from "@/components/dashboard/notifications-panel"
+import { TasksPanel } from "@/components/dashboard/tasks-panel"
+import { PageHeading, StatTile } from "@/components/dashboard/kit"
+import { useSubmissions } from "@/components/dashboard/work-queue"
+import { MonitoringQueue } from "@/components/monitoring/review-panel"
+import { CompliancePanel } from "@/components/monitoring/compliance-panel"
 
 export default function MonitoringDashboard() {
-  const [activeTab, setActiveTab] = useState("overview")
-  const [pendingSubmissions, setPendingSubmissions] = useState(0)
-  const [approvedSubmissions, setApprovedSubmissions] = useState(0)
-  const [complianceIssues, setComplianceIssues] = useState(0)
-  const [isFirstParty, setIsFirstParty] = useState(false)
-  const [notifications, setNotifications] = useState([])
-  const [unreadNotifications, setUnreadNotifications] = useState(0)
+  const [tab, setTab] = React.useState("overview")
+  const { rows } = useSubmissions()
 
-  useEffect(() => {
-    const fetchData = async () => {
-      // Fetch Pending Submissions
-      const collectionName = isFirstParty ? "firstpartysubmissions" : "submissions"
-      const pendingQuery = query(collection(db, collectionName), where("status", "==", "Monitoring and Enforcement"))
-      const pendingSnapshot = await getDocs(pendingQuery)
-      setPendingSubmissions(pendingSnapshot.size)
+  const { data: issues } = useRealtimeCollection<{ status?: string; severity?: string }>(
+    "complianceIssues",
+    [orderBy("createdAt", "desc"), limit(200)],
+    [],
+  )
 
-      // Fetch Approved Submissions
-      const approvedQuery = query(collection(db, collectionName), where("status", "==", "Final Approval"))
-      const approvedSnapshot = await getDocs(approvedQuery)
-      setApprovedSubmissions(approvedSnapshot.size)
+  const mine = rows.filter((row) => row.department === DEPARTMENT.monitoring)
+  const toInspect = mine.filter((row) => stage("inspection").includes(row.status ?? "")).length
+  const sentOn = rows.filter((row) =>
+    stage("inspectionReported").includes(row.status ?? ""),
+  ).length
 
-      // Fetch Compliance Issues (dummy data for now)
-      setComplianceIssues(5)
+  const openIssues = issues.filter((issue) => issue.status !== "Resolved")
+  const severeIssues = openIssues.filter((issue) => issue.severity === "high").length
 
-      // Fetch Notifications
-      const notificationsQuery = query(
-        collection(db, "notifications"),
-        where("department", "==", "Monitoring and Enforcement"),
-      )
-      const notificationsSnapshot = await getDocs(notificationsQuery)
-      const notificationsData = notificationsSnapshot.docs.map((doc) => ({
-        id: doc.id,
-        ...doc.data(),
-        timestamp: doc.data().timestamp?.toDate() || new Date(),
-      }))
-
-      setNotifications(notificationsData)
-      setUnreadNotifications(notificationsData.filter((n) => !n.read).length)
-    }
-
-    fetchData()
-  }, [isFirstParty])
+  const nav: ShellNavItem[] = [
+    { value: "overview", label: "Overview", icon: LayoutDashboard },
+    { value: "inspections", label: "Inspections", icon: ScanSearch, badge: toInspect },
+    { value: "compliance", label: "Compliance", icon: ShieldAlert, badge: openIssues.length },
+    { value: "chat", label: "Chat", icon: MessagesSquare },
+    { value: "tasks", label: "Tasks", icon: ListTodo },
+    { value: "notifications", label: "Notifications", icon: Bell },
+  ]
 
   return (
-    <div className="flex min-h-screen flex-col">
-      <MonitoringHeader
-        unreadNotifications={unreadNotifications}
-        onToggleSubmissionType={() => setIsFirstParty(!isFirstParty)}
-        submissionType={isFirstParty ? "First-Party" : "Third-Party"}
-      />
+    <DashboardShell
+      audience="monitoring_enforcement"
+      unitName="Monitoring & Enforcement"
+      unitCaption="Monitoring & Enforcement"
+      nav={nav}
+      active={tab}
+      onNavigate={setTab}
+    >
+      {tab === "overview" ? (
+        <div className="space-y-6">
+          <PageHeading
+            title="Monitoring & Enforcement"
+            description="Inspect proposed sites, verify what was actually erected, and keep the register of boards that are out of compliance."
+          />
 
-      <div className="flex-1 space-y-4 p-8 pt-6">
-        <div className="flex items-center justify-between">
-          <h2 className="text-3xl font-bold tracking-tight">Monitoring & Enforcement Dashboard</h2>
-          <div className="flex items-center gap-2">
-            <Button variant="outline" onClick={() => setIsFirstParty(!isFirstParty)}>
-              {isFirstParty ? "Switch to Third-Party" : "Switch to First-Party"}
-            </Button>
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <StatTile
+              index={0}
+              label="Site inspections due"
+              value={toInspect}
+              tone="wait"
+              icon={ScanSearch}
+              note="Routed here by the Director"
+              onClick={() => setTab("inspections")}
+            />
+            <StatTile
+              index={1}
+              label="Reports with the Director"
+              value={sentOn}
+              tone="move"
+              icon={ClipboardCheck}
+              note="Awaiting his decision to send on to Planning"
+              onClick={() => setTab("inspections")}
+            />
+            <StatTile
+              index={2}
+              label="Compliance issues open"
+              value={openIssues.length}
+              tone={severeIssues ? "stop" : "wait"}
+              icon={ShieldAlert}
+              note={severeIssues ? `${severeIssues} marked high severity` : "None marked high severity"}
+              onClick={() => setTab("compliance")}
+            />
+            <StatTile
+              index={3}
+              label="Applications on file"
+              value={rows.filter((row) => row.route === "third").length}
+              tone="clear"
+              icon={ShieldCheck}
+              note="Third-party permits in the system"
+            />
           </div>
+
+          <MonitoringQueue />
         </div>
+      ) : null}
 
-        <Tabs defaultValue="overview" value={activeTab} onValueChange={setActiveTab} className="space-y-4">
-          <TabsList>
-            <TabsTrigger value="overview">Overview</TabsTrigger>
-            <TabsTrigger value="submissions">Submissions</TabsTrigger>
-            <TabsTrigger value="compliance">Compliance</TabsTrigger>
-            <TabsTrigger value="chat">
-              Chat
-              <Badge variant="secondary" className="ml-2">
-                3
-              </Badge>
-            </TabsTrigger>
-            <TabsTrigger value="tasks">
-              Tasks
-              <Badge variant="secondary" className="ml-2">
-                6
-              </Badge>
-            </TabsTrigger>
-            <TabsTrigger value="notifications">
-              Notifications
-              {unreadNotifications > 0 && (
-                <Badge variant="secondary" className="ml-2">
-                  {unreadNotifications}
-                </Badge>
-              )}
-            </TabsTrigger>
-          </TabsList>
+      {tab === "inspections" ? (
+        <div className="space-y-5">
+          <PageHeading
+            title="Inspections"
+            description="Fill the inspection report on site and send it to the Director. If he accepts it, the file goes on to Planning."
+          />
+          <MonitoringQueue />
+        </div>
+      ) : null}
 
-          <TabsContent value="overview" className="space-y-4">
-            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-              <Card className="bg-blue-600 text-white">
-                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                  <CardTitle className="text-sm font-medium">Pending Submissions</CardTitle>
-                  <Clock className="h-4 w-4 text-white" />
-                </CardHeader>
-                <CardContent>
-                  <div className="text-2xl font-bold">{pendingSubmissions}</div>
-                  <p className="text-xs text-white/70">+2 since last week</p>
-                </CardContent>
-              </Card>
+      {tab === "compliance" ? (
+        <div className="space-y-5">
+          <PageHeading
+            title="Compliance"
+            description="Boards that are expired, unsafe, or altered without approval — and what's being done about them."
+          />
+          <CompliancePanel unit={DEPARTMENT.monitoring} />
+        </div>
+      ) : null}
 
-              <Card className="bg-green-600 text-white">
-                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                  <CardTitle className="text-sm font-medium">Approved Submissions</CardTitle>
-                  <CheckCircle className="h-4 w-4 text-white" />
-                </CardHeader>
-                <CardContent>
-                  <div className="text-2xl font-bold">{approvedSubmissions}</div>
-                  <p className="text-xs text-white/70">+1 since last week</p>
-                </CardContent>
-              </Card>
+      {tab === "chat" ? (
+        <div className="space-y-5">
+          <PageHeading title="Chat" description="Talk to the other desks without leaving the file." />
+          <ChatPanel role="monitoring_enforcement" channels={channelsFor("monitoring_enforcement")} />
+        </div>
+      ) : null}
 
-              <Card className="bg-red-600 text-white">
-                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                  <CardTitle className="text-sm font-medium">Compliance Issues</CardTitle>
-                  <AlertTriangle className="h-4 w-4 text-white" />
-                </CardHeader>
-                <CardContent>
-                  <div className="text-2xl font-bold">{complianceIssues}</div>
-                  <p className="text-xs text-white/70">-2 since last month</p>
-                </CardContent>
-              </Card>
-            </div>
+      {tab === "tasks" ? (
+        <div className="space-y-5">
+          <PageHeading title="Tasks" description="Field work and follow-ups for the enforcement team." />
+          <TasksPanel unit={DEPARTMENT.monitoring} />
+        </div>
+      ) : null}
 
-            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-7">
-              <Card className="col-span-4">
-                <CardHeader>
-                  <CardTitle>Recent Submissions</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="space-y-8">
-                    {[1, 2, 3].map((_, i) => (
-                      <div className="flex items-center" key={i}>
-                        <Avatar className="h-9 w-9">
-                          <AvatarImage src={`/placeholder.svg?height=36&width=36`} alt="Avatar" />
-                          <AvatarFallback>{`A${i + 1}`}</AvatarFallback>
-                        </Avatar>
-                        <div className="ml-4 space-y-1">
-                          <p className="text-sm font-medium leading-none">Applicant {i + 1}</p>
-                          <p className="text-sm text-muted-foreground">
-                            {["New Sign", "Upgrading of Existing Sign", "Change of Existing Sign"][i]}
-                          </p>
-                        </div>
-                        <div className="ml-auto font-medium">
-                          <Badge variant={["default", "secondary", "outline"][i]}>
-                            {["Pending", "In Progress", "Approved"][i]}
-                          </Badge>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </CardContent>
-              </Card>
-
-              <Card className="col-span-3">
-                <CardHeader>
-                  <CardTitle>Recent Activity</CardTitle>
-                  <CardDescription>You have {unreadNotifications} unread notifications</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <div className="space-y-8">
-                    {[
-                      { icon: CheckCircle, text: "Submission #1234 approved", time: "2 hours ago" },
-                      { icon: Shield, text: "Compliance check completed", time: "4 hours ago" },
-                      { icon: AlertTriangle, text: "Non-compliance issue detected", time: "1 day ago" },
-                    ].map((item, i) => (
-                      <div className="flex items-center" key={i}>
-                        <div className="flex h-9 w-9 items-center justify-center rounded-full bg-muted">
-                          <item.icon className="h-5 w-5" />
-                        </div>
-                        <div className="ml-4 space-y-1">
-                          <p className="text-sm font-medium leading-none">{item.text}</p>
-                          <p className="text-sm text-muted-foreground">{item.time}</p>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </CardContent>
-              </Card>
-            </div>
-          </TabsContent>
-
-          <TabsContent value="submissions">
-            <Card>
-              <CardHeader>
-                <CardTitle>Submissions Management</CardTitle>
-                <CardDescription>
-                  Review and enforce {isFirstParty ? "first-party" : "third-party"} submissions
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                <SubmissionsTable isFirstParty={isFirstParty} />
-              </CardContent>
-            </Card>
-          </TabsContent>
-
-          <TabsContent value="compliance">
-            <CompliancePanel />
-          </TabsContent>
-
-          <TabsContent value="chat">
-            <ChatPanel department="Monitoring and Enforcement" />
-          </TabsContent>
-
-          <TabsContent value="tasks">
-            <TasksPanel department="Monitoring and Enforcement" />
-          </TabsContent>
-
-          <TabsContent value="notifications">
-            <NotificationsPanel department="Monitoring and Enforcement" notifications={notifications} />
-          </TabsContent>
-        </Tabs>
-      </div>
-    </div>
+      {tab === "notifications" || tab === "settings" ? (
+        <div className="space-y-5">
+          <PageHeading title="Notifications" description="Everything routed to Monitoring & Enforcement." />
+          <NotificationsPanel audience="monitoring_enforcement" />
+        </div>
+      ) : null}
+    </DashboardShell>
   )
 }

@@ -1,313 +1,388 @@
 "use client"
 
-import { useState } from "react"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Button } from "@/components/ui/button"
-import { Badge } from "@/components/ui/badge"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { ScrollArea } from "@/components/ui/scroll-area"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import * as React from "react"
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Textarea } from "@/components/ui/textarea"
-import { Search, Calendar, Filter, Plus } from "lucide-react"
+  addDoc,
+  collection,
+  doc,
+  limit,
+  orderBy,
+  serverTimestamp,
+  updateDoc,
+} from "firebase/firestore"
+import { AlertTriangle, Plus, ShieldCheck, X } from "lucide-react"
+import { db } from "@/lib/firebase"
+import { useCurrentUser, useRealtimeCollection } from "@/hooks/use-firestore"
+import { formatDate, toMillis } from "@/lib/format"
+import { toast } from "@/components/ui/toast"
+import { Sheet } from "@/components/dashboard/sheet"
+import {
+  ActionButton,
+  FieldGrid,
+  SearchField,
+  SelectField,
+  TextField,
+  TextareaField,
+} from "@/components/dashboard/form-kit"
+import {
+  EmptyState,
+  Field,
+  LoadFailed,
+  Panel,
+  RowsSkeleton,
+  SectionLabel,
+  StatusPill,
+  TONE,
+  type StateTone,
+} from "@/components/dashboard/kit"
+import { Segmented } from "@/components/dashboard/notifications-panel"
+import { cn } from "@/lib/utils"
 
-export default function CompliancePanel() {
-  const [activeTab, setActiveTab] = useState("issues")
-  const [searchTerm, setSearchTerm] = useState("")
-  const [isDialogOpen, setIsDialogOpen] = useState(false)
-  const [selectedIssue, setSelectedIssue] = useState(null)
+const COLLECTION = "complianceIssues"
 
-  const complianceIssues = [
-    {
-      id: 1,
-      site: "Billboard A",
-      owner: "ABC Advertising",
-      issue: "Expired permit",
-      severity: "high",
-      status: "open",
-      reportedDate: "2023-10-15",
-      dueDate: "2023-11-15",
-    },
-    {
-      id: 2,
-      site: "Street Sign B",
-      owner: "XYZ Corp",
-      issue: "Non-compliant dimensions",
-      severity: "medium",
-      status: "in-progress",
-      reportedDate: "2023-10-20",
-      dueDate: "2023-11-20",
-    },
-    {
-      id: 3,
-      site: "Roof Sign C",
-      owner: "123 Enterprises",
-      issue: "Structural safety concern",
-      severity: "high",
-      status: "open",
-      reportedDate: "2023-10-25",
-      dueDate: "2023-11-10",
-    },
-    {
-      id: 4,
-      site: "Billboard D",
-      owner: "Metro Signs",
-      issue: "Unauthorized modification",
-      severity: "medium",
-      status: "resolved",
-      reportedDate: "2023-09-15",
-      dueDate: "2023-10-15",
-    },
-    {
-      id: 5,
-      site: "Canopy Sign E",
-      owner: "City Displays",
-      issue: "Illumination violation",
-      severity: "low",
-      status: "in-progress",
-      reportedDate: "2023-10-10",
-      dueDate: "2023-11-30",
-    },
-  ]
+interface IssueDoc {
+  site?: string
+  owner?: string
+  issue?: string
+  severity?: "low" | "medium" | "high"
+  status?: "Open" | "In Progress" | "Resolved"
+  coordinates?: string
+  dueDate?: string
+  notes?: string
+  raisedBy?: string
+  createdAt?: unknown
+  updatedAt?: unknown
+}
 
-  const filteredIssues = complianceIssues.filter(
-    (issue) =>
-      issue.site.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      issue.owner.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      issue.issue.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      issue.status.toLowerCase().includes(searchTerm.toLowerCase()),
+const SEVERITY_TONE: Record<string, StateTone> = { high: "stop", medium: "wait", low: "idle" }
+
+const emptyForm = {
+  site: "",
+  owner: "",
+  issue: "",
+  severity: "medium",
+  coordinates: "",
+  dueDate: "",
+  notes: "",
+}
+
+export function CompliancePanel({ unit }: { unit: string }) {
+  const { user } = useCurrentUser()
+  const [tab, setTab] = React.useState<"open" | "resolved" | "all">("open")
+  const [search, setSearch] = React.useState("")
+  const [composing, setComposing] = React.useState(false)
+  const [form, setForm] = React.useState(emptyForm)
+  const [saving, setSaving] = React.useState(false)
+  const [selected, setSelected] = React.useState<(IssueDoc & { id: string }) | null>(null)
+  const [note, setNote] = React.useState("")
+  const [status, setStatus] = React.useState("Open")
+
+  const { data, loading, error } = useRealtimeCollection<IssueDoc>(
+    COLLECTION,
+    [orderBy("createdAt", "desc"), limit(200)],
+    [],
   )
 
-  const getSeverityBadge = (severity) => {
-    switch (severity) {
-      case "high":
-        return <Badge variant="destructive">High</Badge>
-      case "medium":
-        return <Badge variant="default">Medium</Badge>
-      case "low":
-        return <Badge variant="secondary">Low</Badge>
-      default:
-        return <Badge variant="outline">{severity}</Badge>
+  const issues = React.useMemo(() => {
+    const term = search.trim().toLowerCase()
+    return data
+      .filter((issue) => {
+        if (tab === "open" && issue.status === "Resolved") return false
+        if (tab === "resolved" && issue.status !== "Resolved") return false
+        if (!term) return true
+        return [issue.site, issue.owner, issue.issue]
+          .filter(Boolean)
+          .some((value) => String(value).toLowerCase().includes(term))
+      })
+      .sort((a, b) => toMillis(b.createdAt) - toMillis(a.createdAt))
+  }, [data, tab, search])
+
+  const openCount = data.filter((issue) => issue.status !== "Resolved").length
+
+  const create = async () => {
+    if (!form.site.trim() || !form.issue.trim()) {
+      toast.warning({
+        title: "Missing detail",
+        description: "A compliance issue needs the site and what's wrong with it.",
+      })
+      return
+    }
+    setSaving(true)
+    try {
+      await addDoc(collection(db, COLLECTION), {
+        ...form,
+        site: form.site.trim(),
+        issue: form.issue.trim(),
+        status: "Open",
+        raisedBy: user?.displayName || user?.email || unit,
+        createdAt: serverTimestamp(),
+      })
+      toast.success({ title: "Issue logged", description: form.site.trim() })
+      setForm(emptyForm)
+      setComposing(false)
+    } catch (err) {
+      toast.error({
+        title: "Issue not logged",
+        description: err instanceof Error ? err.message : "Try again in a moment.",
+      })
+    } finally {
+      setSaving(false)
     }
   }
 
-  const getStatusBadge = (status) => {
-    switch (status) {
-      case "open":
-        return <Badge variant="destructive">Open</Badge>
-      case "in-progress":
-        return <Badge variant="default">In Progress</Badge>
-      case "resolved":
-        return (
-          <Badge variant="outline" className="bg-green-100 text-green-800 hover:bg-green-100">
-            Resolved
-          </Badge>
-        )
-      default:
-        return <Badge variant="outline">{status}</Badge>
+  const save = async () => {
+    if (!selected) return
+    try {
+      await updateDoc(doc(db, COLLECTION, selected.id), {
+        status,
+        notes: note || selected.notes || "",
+        updatedAt: new Date().toISOString(),
+      })
+      toast.success({
+        title: status === "Resolved" ? "Issue resolved" : "Issue updated",
+        description: selected.site,
+      })
+      setSelected(null)
+    } catch (err) {
+      toast.error({
+        title: "Update not saved",
+        description: err instanceof Error ? err.message : "Try again in a moment.",
+      })
     }
-  }
-
-  const handleViewIssue = (issue) => {
-    setSelectedIssue(issue)
-    setIsDialogOpen(true)
   }
 
   return (
-    <Card className="h-[calc(100vh-12rem)]">
-      <CardHeader>
-        <CardTitle>Compliance Management</CardTitle>
-        <CardDescription>Track and resolve compliance issues</CardDescription>
-      </CardHeader>
-      <CardContent className="p-0">
-        <Tabs defaultValue="issues" value={activeTab} onValueChange={setActiveTab} className="h-full">
-          <div className="border-b px-4 py-2 flex items-center justify-between">
-            <TabsList>
-              <TabsTrigger value="issues">Issues</TabsTrigger>
-              <TabsTrigger value="inspections">Inspections</TabsTrigger>
-              <TabsTrigger value="reports">Reports</TabsTrigger>
-            </TabsList>
-            <div className="relative w-64">
-              <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
-              <Input
-                placeholder="Search issues..."
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                className="pl-8"
+    <>
+      <Panel
+        title="Compliance register"
+        description={openCount ? `${openCount} issue${openCount > 1 ? "s" : ""} open` : "Nothing outstanding"}
+        actions={
+          <>
+            <Segmented
+              value={tab}
+              onChange={(v) => setTab(v as typeof tab)}
+              options={[
+                { value: "open", label: "Open" },
+                { value: "resolved", label: "Resolved" },
+                { value: "all", label: "All" },
+              ]}
+            />
+            <ActionButton
+              icon={composing ? X : Plus}
+              onClick={() => setComposing((v) => !v)}
+            >
+              {composing ? "Cancel" : "Log issue"}
+            </ActionButton>
+          </>
+        }
+        bodyClassName="p-0"
+      >
+        <div className="border-b border-border p-3 sm:px-5">
+          <SearchField value={search} onChange={setSearch} placeholder="Search site, owner or issue" />
+        </div>
+
+        {composing ? (
+          <div className="reveal border-b border-border bg-muted/40 p-4 sm:px-5">
+            <FieldGrid>
+              <TextField
+                id="ci-site"
+                label="Site or board"
+                value={form.site}
+                placeholder="Billboard at Kubwa Expressway"
+                onChange={(site) => setForm({ ...form, site })}
               />
+              <TextField
+                id="ci-owner"
+                label="Owner or operator"
+                value={form.owner}
+                onChange={(owner) => setForm({ ...form, owner })}
+              />
+              <TextField
+                id="ci-coords"
+                label="GPS coordinates"
+                mono
+                value={form.coordinates}
+                placeholder="9.0765, 7.3986"
+                onChange={(coordinates) => setForm({ ...form, coordinates })}
+              />
+              <SelectField
+                id="ci-severity"
+                label="Severity"
+                value={form.severity}
+                onChange={(severity) => setForm({ ...form, severity })}
+                options={[
+                  { value: "low", label: "Low" },
+                  { value: "medium", label: "Medium" },
+                  { value: "high", label: "High — act now" },
+                ]}
+              />
+              <TextField
+                id="ci-issue"
+                label="What's wrong"
+                value={form.issue}
+                placeholder="Expired permit, unsafe structure, unauthorised change"
+                onChange={(issue) => setForm({ ...form, issue })}
+              />
+              <TextField
+                id="ci-due"
+                label="Rectify by"
+                type="date"
+                value={form.dueDate}
+                onChange={(dueDate) => setForm({ ...form, dueDate })}
+              />
+              <TextareaField
+                id="ci-notes"
+                label="Notes"
+                value={form.notes}
+                rows={2}
+                onChange={(notes) => setForm({ ...form, notes })}
+              />
+            </FieldGrid>
+            <div className="mt-3 flex justify-end">
+              <ActionButton onClick={create} disabled={saving}>
+                {saving ? "Logging…" : "Log issue"}
+              </ActionButton>
             </div>
           </div>
+        ) : null}
 
-          <TabsContent value="issues" className="m-0 h-[calc(100vh-20rem)]">
-            <ScrollArea className="h-full">
-              <div className="p-4">
-                <div className="flex justify-between mb-4">
-                  <div className="flex gap-2">
-                    <Button variant="outline" size="sm">
-                      <Filter className="h-4 w-4 mr-2" />
-                      Filter
-                    </Button>
-                    <Select defaultValue="all">
-                      <SelectTrigger className="w-[180px] h-9">
-                        <SelectValue placeholder="Status" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="all">All Statuses</SelectItem>
-                        <SelectItem value="open">Open</SelectItem>
-                        <SelectItem value="in-progress">In Progress</SelectItem>
-                        <SelectItem value="resolved">Resolved</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <Button size="sm">
-                    <Plus className="h-4 w-4 mr-2" />
-                    New Issue
-                  </Button>
-                </div>
-
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Site</TableHead>
-                      <TableHead>Owner</TableHead>
-                      <TableHead>Issue</TableHead>
-                      <TableHead>Severity</TableHead>
-                      <TableHead>Status</TableHead>
-                      <TableHead>Due Date</TableHead>
-                      <TableHead className="text-right">Actions</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {filteredIssues.length === 0 ? (
-                      <TableRow>
-                        <TableCell colSpan={7} className="text-center py-6 text-muted-foreground">
-                          No compliance issues found
-                        </TableCell>
-                      </TableRow>
-                    ) : (
-                      filteredIssues.map((issue) => (
-                        <TableRow key={issue.id}>
-                          <TableCell className="font-medium">{issue.site}</TableCell>
-                          <TableCell>{issue.owner}</TableCell>
-                          <TableCell>{issue.issue}</TableCell>
-                          <TableCell>{getSeverityBadge(issue.severity)}</TableCell>
-                          <TableCell>{getStatusBadge(issue.status)}</TableCell>
-                          <TableCell>
-                            <div className="flex items-center">
-                              <Calendar className="h-4 w-4 mr-1 text-muted-foreground" />
-                              {issue.dueDate}
-                            </div>
-                          </TableCell>
-                          <TableCell className="text-right">
-                            <Button variant="ghost" size="sm" onClick={() => handleViewIssue(issue)}>
-                              View
-                            </Button>
-                          </TableCell>
-                        </TableRow>
-                      ))
-                    )}
-                  </TableBody>
-                </Table>
-              </div>
-            </ScrollArea>
-          </TabsContent>
-
-          <TabsContent value="inspections" className="m-0 p-4">
-            <div className="text-center py-8 text-muted-foreground">
-              Inspections schedule and management will be implemented here
-            </div>
-          </TabsContent>
-
-          <TabsContent value="reports" className="m-0 p-4">
-            <div className="text-center py-8 text-muted-foreground">
-              Compliance reports and analytics will be implemented here
-            </div>
-          </TabsContent>
-        </Tabs>
-      </CardContent>
-
-      <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-        <DialogContent className="max-w-3xl">
-          <DialogHeader>
-            <DialogTitle>Compliance Issue Details</DialogTitle>
-            <DialogDescription>View and update the status of this compliance issue</DialogDescription>
-          </DialogHeader>
-
-          {selectedIssue && (
-            <div className="grid gap-4 py-4">
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <Label className="text-muted-foreground text-sm">Site</Label>
-                  <p className="font-medium">{selectedIssue.site}</p>
-                </div>
-                <div>
-                  <Label className="text-muted-foreground text-sm">Owner</Label>
-                  <p className="font-medium">{selectedIssue.owner}</p>
-                </div>
-                <div className="col-span-2">
-                  <Label className="text-muted-foreground text-sm">Issue</Label>
-                  <p className="font-medium">{selectedIssue.issue}</p>
-                </div>
-                <div>
-                  <Label className="text-muted-foreground text-sm">Severity</Label>
-                  <div className="mt-1">{getSeverityBadge(selectedIssue.severity)}</div>
-                </div>
-                <div>
-                  <Label className="text-muted-foreground text-sm">Status</Label>
-                  <div className="mt-1">{getStatusBadge(selectedIssue.status)}</div>
-                </div>
-                <div>
-                  <Label className="text-muted-foreground text-sm">Reported Date</Label>
-                  <p className="font-medium">{selectedIssue.reportedDate}</p>
-                </div>
-                <div>
-                  <Label className="text-muted-foreground text-sm">Due Date</Label>
-                  <p className="font-medium">{selectedIssue.dueDate}</p>
-                </div>
-                <div className="col-span-2">
-                  <Label htmlFor="update-status">Update Status</Label>
-                  <Select defaultValue={selectedIssue.status}>
-                    <SelectTrigger id="update-status" className="mt-1">
-                      <SelectValue placeholder="Select status" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="open">Open</SelectItem>
-                      <SelectItem value="in-progress">In Progress</SelectItem>
-                      <SelectItem value="resolved">Resolved</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="col-span-2">
-                  <Label htmlFor="comment">Add Comment</Label>
-                  <Textarea
-                    id="comment"
-                    placeholder="Enter your comment or resolution details"
-                    className="mt-1"
-                    rows={3}
-                  />
-                </div>
-              </div>
+        <div className="p-3 sm:p-4">
+          {error ? (
+            <LoadFailed error={error} what="The compliance register" />
+          ) : loading ? (
+            <RowsSkeleton rows={5} columns={5} />
+          ) : !issues.length ? (
+            <EmptyState
+              icon={ShieldCheck}
+              title={tab === "resolved" ? "Nothing resolved yet" : "No open compliance issues"}
+              description="Log an issue when an inspection finds an expired permit, an unsafe structure or an unauthorised change."
+            />
+          ) : (
+            <div className="overflow-x-auto scroll-slim">
+              <table className="w-full border-collapse text-left">
+                <thead>
+                  <tr className="border-b border-border text-[11.5px] font-semibold text-muted-foreground">
+                    <th className="px-3 py-2.5">Site</th>
+                    <th className="hidden px-3 py-2.5 sm:table-cell">Owner</th>
+                    <th className="px-3 py-2.5">Issue</th>
+                    <th className="px-3 py-2.5">Severity</th>
+                    <th className="px-3 py-2.5">Status</th>
+                    <th className="hidden px-3 py-2.5 md:table-cell">Rectify by</th>
+                    <th className="px-3 py-2.5 text-right">Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {issues.map((issue, i) => (
+                    <tr
+                      key={issue.id}
+                      style={{ ["--i" as string]: Math.min(i, 10) }}
+                      className="reveal border-b border-border/70 transition-colors last:border-0 hover:bg-muted/50"
+                    >
+                      <td className="px-3 py-3 text-[13.5px] font-medium text-foreground">
+                        {issue.site}
+                      </td>
+                      <td className="hidden px-3 py-3 text-[13px] text-muted-foreground sm:table-cell">
+                        {issue.owner || "—"}
+                      </td>
+                      <td className="px-3 py-3 text-[13px] text-muted-foreground">{issue.issue}</td>
+                      <td className="px-3 py-3">
+                        <span
+                          className={cn(
+                            "rounded-md px-2 py-0.5 text-[11.5px] font-semibold",
+                            TONE[SEVERITY_TONE[issue.severity ?? "low"] ?? "idle"].soft,
+                          )}
+                        >
+                          {(issue.severity ?? "low").replace(/^./, (c) => c.toUpperCase())}
+                        </span>
+                      </td>
+                      <td className="px-3 py-3">
+                        <StatusPill status={issue.status ?? "Open"} />
+                      </td>
+                      <td className="hidden px-3 py-3 text-[12.5px] text-muted-foreground md:table-cell">
+                        {issue.dueDate ? formatDate(issue.dueDate) : "—"}
+                      </td>
+                      <td className="px-3 py-3 text-right">
+                        <ActionButton
+                          tone="quiet"
+                          onClick={() => {
+                            setSelected(issue)
+                            setNote(issue.notes ?? "")
+                            setStatus(issue.status ?? "Open")
+                          }}
+                        >
+                          Open
+                        </ActionButton>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           )}
+        </div>
+      </Panel>
 
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setIsDialogOpen(false)}>
-              Cancel
-            </Button>
-            <Button>Update Issue</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    </Card>
+      <Sheet
+        open={Boolean(selected)}
+        onClose={() => setSelected(null)}
+        title="Compliance issue"
+        caption={selected?.site ?? ""}
+        width="max-w-xl"
+        footer={
+          <div className="flex justify-end gap-2">
+            <ActionButton tone="quiet" onClick={() => setSelected(null)}>
+              Close
+            </ActionButton>
+            <ActionButton onClick={save}>Save changes</ActionButton>
+          </div>
+        }
+      >
+        {selected ? (
+          <div className="space-y-6">
+            <div>
+              <SectionLabel>Details</SectionLabel>
+              <div className="grid grid-cols-2 gap-4">
+                <Field label="Site" value={selected.site} />
+                <Field label="Owner" value={selected.owner} />
+                <Field label="Coordinates" value={selected.coordinates} mono />
+                <Field label="Rectify by" value={selected.dueDate ? formatDate(selected.dueDate) : "—"} />
+                <Field label="Raised by" value={selected.raisedBy} />
+                <Field label="Logged" value={formatDate(selected.createdAt)} />
+                <Field label="Issue" value={selected.issue} className="col-span-2" />
+              </div>
+            </div>
+
+            <SelectField
+              id="ci-status"
+              label="Status"
+              value={status}
+              onChange={setStatus}
+              options={[
+                { value: "Open", label: "Open" },
+                { value: "In Progress", label: "In progress" },
+                { value: "Resolved", label: "Resolved" },
+              ]}
+            />
+
+            <TextareaField
+              id="ci-note"
+              label="Notes"
+              value={note}
+              rows={4}
+              placeholder="What action has been taken, and what happens next."
+              onChange={setNote}
+            />
+
+            {selected.severity === "high" && status !== "Resolved" ? (
+              <p className="flex items-start gap-2 rounded-lg bg-[hsl(var(--state-stop-soft))] px-3.5 py-2.5 text-[12.5px] text-[hsl(var(--state-stop))]">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                Marked high severity. Structures in this state should be served notice before the
+                rectification date passes.
+              </p>
+            ) : null}
+          </div>
+        ) : null}
+      </Sheet>
+    </>
   )
 }

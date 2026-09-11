@@ -1,381 +1,160 @@
-// app/admin/finance/page.tsx
 "use client"
 
-import { useState, useEffect } from "react"
-import { collection, getDocs, query, where, updateDoc, doc, arrayUnion, addDoc } from "firebase/firestore"
-import { db } from "@/lib/firebase"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { Button } from "@/components/ui/button"
+import * as React from "react"
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog"
-import { Textarea } from "@/components/ui/textarea"
-import { Badge } from "@/components/ui/badge"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Search, DollarSign, CheckCircle, XCircle } from "lucide-react"
-
-interface Submission {
-  id: string
-  submissionId: string
-  applicantName: string
-  companyName?: string
-  applicationType: string
-  status: string
-  department: string
-  isFirstParty: boolean
-  billing?: {
-    applicationFee: number
-    processingFee: number
-    annualFee: number
-    totalAmount: number
-    paymentStatus: string
-    invoiceNumber?: string
-    dueDate?: string
-  }
-}
+  BadgeCheck,
+  Bell,
+  LayoutDashboard,
+  ListTodo,
+  MessagesSquare,
+  Receipt,
+  TrendingUp,
+  Users,
+  Wallet,
+} from "lucide-react"
+import { DEPARTMENT, STATUS, channelsFor, stage } from "@/lib/workflow"
+import { naira } from "@/lib/format"
+import { DashboardShell, type ShellNavItem } from "@/components/dashboard/shell"
+import { ChatPanel } from "@/components/dashboard/chat-panel"
+import { NotificationsPanel } from "@/components/dashboard/notifications-panel"
+import { TasksPanel } from "@/components/dashboard/tasks-panel"
+import { PageHeading, StatTile } from "@/components/dashboard/kit"
+import { useSubmissions } from "@/components/dashboard/work-queue"
+import { FinanceQueue, RevenuePanel } from "@/components/finance/finance-panels"
+import { StaffPanel } from "@/components/shared/staff-panel"
 
 export default function FinanceDashboard() {
-  const [submissions, setSubmissions] = useState<Submission[]>([])
-  const [selectedSubmission, setSelectedSubmission] = useState<Submission | null>(null)
-  const [comment, setComment] = useState("")
-  const [isDialogOpen, setIsDialogOpen] = useState(false)
-  const [searchTerm, setSearchTerm] = useState("")
-  const [activeTab, setActiveTab] = useState("pending")
+  const [tab, setTab] = React.useState("overview")
+  const { rows } = useSubmissions()
 
-  const [billingData, setBillingData] = useState({
-    applicationFee: 25000,
-    processingFee: 10000,
-    annualFee: 150000,
-    totalAmount: 185000,
-    invoiceNumber: "",
-    dueDate: "",
-  })
+  const firstParty = rows.filter((row) => row.route === "first")
 
-  useEffect(() => {
-    fetchSubmissions()
-  }, [activeTab])
+  const toInvoice = firstParty.filter((row) =>
+    stage("visitReported").includes(row.status ?? ""),
+  ).length
 
-  const fetchSubmissions = async () => {
-    const q = query(
-      collection(db, "submissions"),
-      where("department", "==", "Finance"),
-      where("status", "==", activeTab === "pending" ? "Pending Billing" : "Billed")
-    )
-    
-    const snapshot = await getDocs(q)
-    const data = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() } as Submission))
-    setSubmissions(data)
-  }
+  const awaiting = firstParty.filter((row) => stage("awaitingPayment").includes(row.status ?? ""))
+  const owed = awaiting.reduce((sum, row) => sum + Number(row.billing?.totalAmount ?? 0), 0)
 
-  const handleView = (submission: Submission) => {
-    setSelectedSubmission(submission)
-    if (submission.billing) {
-      setBillingData({
-        applicationFee: submission.billing.applicationFee || 25000,
-        processingFee: submission.billing.processingFee || 10000,
-        annualFee: submission.billing.annualFee || 150000,
-        totalAmount: submission.billing.totalAmount || 185000,
-        invoiceNumber: submission.billing.invoiceNumber || `INV-${Date.now()}`,
-        dueDate: submission.billing.dueDate || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-      })
-    }
-    setIsDialogOpen(true)
-  }
+  const collected = firstParty
+    .filter((row) => String(row.billing?.paymentStatus ?? "") === "Paid")
+    .reduce((sum, row) => sum + Number(row.billing?.totalAmount ?? 0), 0)
 
-  const handleClose = () => {
-    setSelectedSubmission(null)
-    setComment("")
-    setIsDialogOpen(false)
-    setBillingData({
-      applicationFee: 25000,
-      processingFee: 10000,
-      annualFee: 150000,
-      totalAmount: 185000,
-      invoiceNumber: "",
-      dueDate: "",
-    })
-  }
-
-  const handleGenerateInvoice = async () => {
-    if (!selectedSubmission) return
-
-    try {
-      const submissionRef = doc(db, "submissions", selectedSubmission.id)
-      const now = new Date().toISOString()
-      const invoiceNumber = `INV-${Date.now()}-${Math.random().toString(36).substr(2, 9).toUpperCase()}`
-
-      await updateDoc(submissionRef, {
-        status: "Billed",
-        department: selectedSubmission.isFirstParty ? "Business Development" : "Director",
-        billing: {
-          ...billingData,
-          invoiceNumber,
-          dueDate: billingData.dueDate || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
-          paymentStatus: "Pending",
-          generatedDate: now,
-        },
-        comments: arrayUnion({
-          text: comment || `Invoice generated: ${invoiceNumber}`,
-          timestamp: now,
-          action: "Invoice generated by Finance",
-        }),
-        updatedAt: now,
-      })
-
-      // Log activity
-      await addDoc(collection(db, "activityLogs"), {
-        submissionId: selectedSubmission.id,
-        action: "Invoice generated",
-        timestamp: now,
-        comment: comment,
-        userId: "finance",
-      })
-
-      // Create notification
-      await addDoc(collection(db, "notifications"), {
-        userId: selectedSubmission.isFirstParty ? "business_development" : "director",
-        content: `Invoice generated for ${selectedSubmission.applicantName}`,
-        type: "info",
-        referenceId: selectedSubmission.id,
-        isRead: false,
-        createdAt: now,
-      })
-
-      fetchSubmissions()
-      handleClose()
-    } catch (err) {
-      console.error("Error generating invoice:", err)
-    }
-  }
-
-  const filteredSubmissions = submissions.filter(submission =>
-    submission.applicantName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    submission.submissionId.toLowerCase().includes(searchTerm.toLowerCase())
-  )
-
-  const calculateTotal = () => {
-    const total = billingData.applicationFee + billingData.processingFee + billingData.annualFee
-    setBillingData(prev => ({ ...prev, totalAmount: total }))
-  }
+  const nav: ShellNavItem[] = [
+    { value: "overview", label: "Overview", icon: LayoutDashboard },
+    { value: "billing", label: "Billing", icon: Receipt, badge: toInvoice },
+    { value: "revenue", label: "Revenue", icon: TrendingUp },
+    { value: "staff", label: "Staff", icon: Users },
+    { value: "chat", label: "Chat", icon: MessagesSquare },
+    { value: "tasks", label: "Tasks", icon: ListTodo },
+    { value: "notifications", label: "Notifications", icon: Bell },
+  ]
 
   return (
-    <div className="container mx-auto px-4 py-8">
-      <Card>
-        <CardHeader>
-          <CardTitle>Finance Department</CardTitle>
-          <CardDescription>Manage billing and invoices for submissions</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="flex justify-between items-center mb-6">
-            <div className="flex gap-4">
-              <Button
-                variant={activeTab === "pending" ? "default" : "outline"}
-                onClick={() => setActiveTab("pending")}
-              >
-                Pending Billing
-              </Button>
-              <Button
-                variant={activeTab === "billed" ? "default" : "outline"}
-                onClick={() => setActiveTab("billed")}
-              >
-                Billed
-              </Button>
-            </div>
-            
-            <div className="relative w-64">
-              <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
-              <Input
-                placeholder="Search submissions..."
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                className="pl-8"
-              />
-            </div>
+    <DashboardShell
+      audience="finance"
+      unitName="Finance & Admin"
+      unitCaption="Finance & Admin"
+      nav={nav}
+      active={tab}
+      onNavigate={setTab}
+    >
+      {tab === "overview" ? (
+        <div className="space-y-6">
+          <PageHeading
+            title="Finance & Admin"
+            description="Raise the permit invoice once an application is cleared, then record the payment so the Director can give final approval."
+          />
+
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <StatTile
+              index={0}
+              label="Waiting to be invoiced"
+              value={toInvoice}
+              tone="wait"
+              icon={Receipt}
+              note="Site visit done, measurements in"
+              onClick={() => setTab("billing")}
+            />
+            <StatTile
+              index={1}
+              label="Invoices outstanding"
+              value={awaiting.length}
+              tone="move"
+              icon={BadgeCheck}
+              note={owed ? `${naira(owed)} unpaid` : "Nothing unpaid"}
+              onClick={() => setTab("billing")}
+            />
+            <StatTile
+              index={2}
+              label="Collected to date"
+              value={collected}
+              tone="clear"
+              icon={Wallet}
+              note="Payments recorded against invoices"
+              onClick={() => setTab("revenue")}
+            />
+            <StatTile
+              index={3}
+              label="First-party applications"
+              value={firstParty.length}
+              tone="idle"
+              icon={TrendingUp}
+              note="Third-party permits are not billed"
+            />
           </div>
 
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Submission ID</TableHead>
-                <TableHead>Applicant Name</TableHead>
-                <TableHead>Company</TableHead>
-                <TableHead>Application Type</TableHead>
-                <TableHead>Type</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead className="text-right">Actions</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {filteredSubmissions.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={7} className="text-center py-6 text-muted-foreground">
-                    No submissions found
-                  </TableCell>
-                </TableRow>
-              ) : (
-                filteredSubmissions.map((submission) => (
-                  <TableRow key={submission.id}>
-                    <TableCell className="font-mono text-sm">
-                      {submission.submissionId}
-                    </TableCell>
-                    <TableCell className="font-medium">{submission.applicantName}</TableCell>
-                    <TableCell>{submission.companyName || "N/A"}</TableCell>
-                    <TableCell>{submission.applicationType}</TableCell>
-                    <TableCell>
-                      <Badge variant={submission.isFirstParty ? "default" : "secondary"}>
-                        {submission.isFirstParty ? "First Party" : "Third Party"}
-                      </Badge>
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant={submission.status === "Billed" ? "default" : "outline"}>
-                        {submission.status}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <Button variant="ghost" size="sm" onClick={() => handleView(submission)}>
-                        {activeTab === "pending" ? "Generate Invoice" : "View"}
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                ))
-              )}
-            </TableBody>
-          </Table>
-        </CardContent>
-      </Card>
+          <FinanceQueue />
+        </div>
+      ) : null}
 
-      <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-        <DialogContent className="max-w-2xl">
-          <DialogHeader>
-            <DialogTitle>Generate Invoice</DialogTitle>
-            <DialogDescription>
-              Create billing details for {selectedSubmission?.applicantName}
-            </DialogDescription>
-          </DialogHeader>
+      {tab === "billing" ? (
+        <div className="space-y-5">
+          <PageHeading
+            title="Billing"
+            description="Set the fees for each permit, issue the invoice, then confirm payment against a Remita or teller reference."
+          />
+          <FinanceQueue />
+        </div>
+      ) : null}
 
-          <div className="space-y-4">
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="applicationFee">Application Fee (₦)</Label>
-                <Input
-                  id="applicationFee"
-                  type="number"
-                  value={billingData.applicationFee}
-                  onChange={(e) => {
-                    setBillingData(prev => ({ ...prev, applicationFee: Number(e.target.value) }))
-                    setTimeout(calculateTotal, 100)
-                  }}
-                />
-              </div>
+      {tab === "revenue" ? (
+        <div className="space-y-5">
+          <PageHeading
+            title="Revenue"
+            description="Everything here is calculated from invoices raised in Billing — no figures are entered twice."
+          />
+          <RevenuePanel />
+        </div>
+      ) : null}
 
-              <div className="space-y-2">
-                <Label htmlFor="processingFee">Processing Fee (₦)</Label>
-                <Input
-                  id="processingFee"
-                  type="number"
-                  value={billingData.processingFee}
-                  onChange={(e) => {
-                    setBillingData(prev => ({ ...prev, processingFee: Number(e.target.value) }))
-                    setTimeout(calculateTotal, 100)
-                  }}
-                />
-              </div>
+      {tab === "staff" ? (
+        <div className="space-y-5">
+          <PageHeading title="Staff" description="Who works each desk across the directorate." />
+          <StaffPanel />
+        </div>
+      ) : null}
 
-              <div className="space-y-2">
-                <Label htmlFor="annualFee">Annual Fee (₦)</Label>
-                <Input
-                  id="annualFee"
-                  type="number"
-                  value={billingData.annualFee}
-                  onChange={(e) => {
-                    setBillingData(prev => ({ ...prev, annualFee: Number(e.target.value) }))
-                    setTimeout(calculateTotal, 100)
-                  }}
-                />
-              </div>
+      {tab === "chat" ? (
+        <div className="space-y-5">
+          <PageHeading title="Chat" description="Talk to the other desks without leaving the file." />
+          <ChatPanel role="finance" channels={channelsFor("finance")} />
+        </div>
+      ) : null}
 
-              <div className="space-y-2">
-                <Label htmlFor="totalAmount">Total Amount (₦)</Label>
-                <Input
-                  id="totalAmount"
-                  type="number"
-                  value={billingData.totalAmount}
-                  readOnly
-                  className="bg-muted"
-                />
-              </div>
+      {tab === "tasks" ? (
+        <div className="space-y-5">
+          <PageHeading title="Tasks" description="Follow-ups that don't belong to a single invoice." />
+          <TasksPanel unit={DEPARTMENT.finance} />
+        </div>
+      ) : null}
 
-              <div className="space-y-2">
-                <Label htmlFor="invoiceNumber">Invoice Number</Label>
-                <Input
-                  id="invoiceNumber"
-                  value={billingData.invoiceNumber}
-                  onChange={(e) => setBillingData(prev => ({ ...prev, invoiceNumber: e.target.value }))}
-                  placeholder="Auto-generated"
-                />
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="dueDate">Due Date</Label>
-                <Input
-                  id="dueDate"
-                  type="date"
-                  value={billingData.dueDate}
-                  onChange={(e) => setBillingData(prev => ({ ...prev, dueDate: e.target.value }))}
-                />
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="comment">Comments</Label>
-              <Textarea
-                id="comment"
-                placeholder="Add any billing comments..."
-                value={comment}
-                onChange={(e) => setComment(e.target.value)}
-              />
-            </div>
-
-            <div className="bg-muted p-4 rounded-lg">
-              <div className="flex items-center justify-between mb-2">
-                <span className="font-medium">Summary</span>
-                <span className="text-2xl font-bold">₦{billingData.totalAmount.toLocaleString()}</span>
-              </div>
-              <div className="text-sm text-muted-foreground space-y-1">
-                <div className="flex justify-between">
-                  <span>Application Fee:</span>
-                  <span>₦{billingData.applicationFee.toLocaleString()}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span>Processing Fee:</span>
-                  <span>₦{billingData.processingFee.toLocaleString()}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span>Annual Fee:</span>
-                  <span>₦{billingData.annualFee.toLocaleString()}</span>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <DialogFooter>
-            <Button variant="outline" onClick={handleClose}>
-              Cancel
-            </Button>
-            <Button onClick={handleGenerateInvoice}>
-              Generate Invoice
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    </div>
+      {tab === "notifications" || tab === "settings" ? (
+        <div className="space-y-5">
+          <PageHeading title="Notifications" description="Everything routed to the Finance desk." />
+          <NotificationsPanel audience="finance" />
+        </div>
+      ) : null}
+    </DashboardShell>
   )
 }

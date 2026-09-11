@@ -1,263 +1,332 @@
 "use client"
 
-import { useState } from "react"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import CSUHeader from "@/components/csu/csu-header"
-import PractitionerUploadPanel from "@/components/csu/practitioner-upload-panel"
-import MeetingRequestsPanel from "@/components/csu/meeting-requests-panel"
-import SubmissionsTable from "@/components/csu/submissions-table"
-import { ChatPanel } from "@/components/common/chat-panel"
-import { TasksPanel } from "@/components/common/tasks-panel"
-import { NotificationsPanel } from "@/components/common/notifications-panel"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Badge } from "@/components/ui/badge"
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
+import * as React from "react"
+import { limit, orderBy } from "firebase/firestore"
 import {
-  FileText, CheckCircle, Clock, Upload, Users,
-  TrendingUp, ArrowUpRight, Calendar, Bell,
+  BadgeCheck,
+  CalendarDays,
+  CheckCircle2,
+  ClipboardList,
+  FileText,
+  Inbox,
+  LayoutDashboard,
+  ListTodo,
+  MessagesSquare,
+  Bell,
+  ScrollText,
+  Users,
 } from "lucide-react"
+import { COL } from "@/lib/firebase"
+import { STATUS, stage } from "@/lib/workflow"
+import { RegisterPanel } from "@/components/shared/register-panel"
+import { useMergedCollections, useRealtimeCollection } from "@/hooks/use-firestore"
+import { formatDate, initials, timeAgo, toMillis, truncate } from "@/lib/format"
+import { DashboardShell, type ShellNavItem } from "@/components/dashboard/shell"
+import { ChatPanel } from "@/components/dashboard/chat-panel"
+import { NotificationsPanel } from "@/components/dashboard/notifications-panel"
+import { TasksPanel } from "@/components/dashboard/tasks-panel"
+import {
+  EmptyState,
+  PageHeading,
+  Panel,
+  RowsSkeleton,
+  StatTile,
+  StatusPill,
+  TONE,
+  toneForStatus,
+} from "@/components/dashboard/kit"
+
+// These already talk to Firestore — they keep their existing import paths.
+import { CsuSubmissions } from "@/components/csu/submissions-queue"
+import MeetingRequestsPanel from "@/components/csu/meeting-requests-panel"
+import PractitionerUploadPanel from "@/components/csu/practitioner-upload-panel"
+
+interface SubmissionRow {
+  submissionId?: string
+  applicantName?: string
+  companyName?: string
+  applicationType?: string
+  status?: string
+  createdAt?: unknown
+}
+
+interface ActivityRow {
+  action?: string
+  comment?: string
+  userId?: string
+  timestamp?: unknown
+}
 
 export default function CSUDashboard() {
-  const [activeTab, setActiveTab] = useState("overview")
-  const [isFirstParty, setIsFirstParty] = useState(false)
-  const [pendingSubmissions] = useState(5)
-  const [approvedSubmissions] = useState(12)
-  const [practitioners] = useState(24)
-  const [unreadNotifications, setUnreadNotifications] = useState(3)
+  const [tab, setTab] = React.useState("overview")
 
-  const recentSubmissions = [
-    { name: "Adebayo Okafor", type: "New Sign", status: "Pending", statusColor: "bg-yellow-100 text-yellow-800 border-yellow-200", avatar: "AO" },
-    { name: "Chisom Enterprises Ltd", type: "Upgrading of Existing Sign", status: "In Progress", statusColor: "bg-blue-100 text-blue-800 border-blue-200", avatar: "CE" },
-    { name: "Federal Capital Authority", type: "Change of Existing Sign", status: "Approved", statusColor: "bg-green-100 text-green-800 border-green-200", avatar: "FC" },
-  ]
+  const submissions = useMergedCollections<SubmissionRow>(
+    [
+      { path: COL.firstParty, constraints: [orderBy("createdAt", "desc"), limit(200)], tag: "first" },
+      { path: COL.thirdParty, constraints: [orderBy("createdAt", "desc"), limit(200)], tag: "third" },
+    ],
+    (row) => toMillis(row.createdAt),
+  )
 
-  const recentActivity = [
-    { icon: CheckCircle, text: "Submission #1234 forwarded to Finance", time: "1 hour ago", color: "text-green-600", bg: "bg-green-100" },
-    { icon: FileText, text: "New first-party submission received", time: "3 hours ago", color: "text-blue-600", bg: "bg-blue-100" },
-    { icon: Upload, text: "New practitioner documents uploaded", time: "1 day ago", color: "text-purple-600", bg: "bg-purple-100" },
+  const practitioners = useRealtimeCollection<{ status?: string }>(
+    COL.practitioners,
+    [orderBy("timestamp", "desc"), limit(400)],
+    [],
+  )
+
+  const meetings = useRealtimeCollection<{ status?: string }>(
+    COL.meetings,
+    [orderBy("createdAt", "desc"), limit(200)],
+    [],
+  )
+
+  const activity = useRealtimeCollection<ActivityRow>(
+    COL.activity,
+    [orderBy("timestamp", "desc"), limit(12)],
+    [],
+  )
+
+  const rows = submissions.data
+  const waiting = rows.filter((r) => stage("withCsu").includes(r.status ?? "")).length
+  const toRegister = rows.filter((r) => r.route === "third" && r.status === STATUS.approved).length
+  const returned = rows.filter((r) =>
+    [STATUS.changesRequested, STATUS.declined, "Rejected"].includes(r.status ?? ""),
+  ).length
+  const approved = rows.filter((r) => (r.status ?? "").toLowerCase().includes("approv")).length
+  const meetingsWaiting = meetings.data.filter((m) => (m.status ?? "") === "pending").length
+  const activePractitioners = practitioners.data.filter((p) => (p.status ?? "active") === "active").length
+
+  const nav: ShellNavItem[] = [
+    { value: "overview", label: "Overview", icon: LayoutDashboard },
+    { value: "submissions", label: "Submissions", icon: FileText, badge: waiting + toRegister + returned },
+    { value: "register", label: "Permit register", icon: ScrollText },
+    { value: "meetings", label: "Meeting requests", icon: CalendarDays, badge: meetingsWaiting },
+    { value: "practitioners", label: "Practitioners", icon: Users },
+    { value: "chat", label: "Chat", icon: MessagesSquare },
+    { value: "tasks", label: "Tasks", icon: ListTodo },
+    { value: "notifications", label: "Notifications", icon: Bell },
   ]
 
   return (
-    <div className="flex flex-col min-h-screen bg-slate-50/50">
-      <CSUHeader
-        unreadNotifications={unreadNotifications}
-        onToggleSubmissionType={() => setIsFirstParty(!isFirstParty)}
-        submissionType={isFirstParty ? "First-Party" : "Third-Party"}
-      />
+    <DashboardShell
+      audience="csu"
+      unitName="Customer Service Unit"
+      unitCaption="Customer Service Unit"
+      nav={nav}
+      active={tab}
+      onNavigate={setTab}
+    >
+      {tab === "overview" ? (
+        <div className="space-y-6">
+          <PageHeading
+            title="Customer Service Unit"
+            description="First point of contact for signage applications. Screen what comes in, forward it to the right desk, and keep the practitioner register current."
+          />
 
-      <div className="flex-1 space-y-6 p-6 pt-6">
-        {/* Page Header */}
-        <div className="flex items-center justify-between">
-          <div>
-            <h2 className="text-2xl font-bold tracking-tight text-slate-900">CSU Dashboard</h2>
-            <p className="text-muted-foreground text-sm mt-1">
-              Customer Service Unit — Manage submissions and practitioners
-            </p>
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <StatTile
+              index={0}
+              label="Waiting on your review"
+              value={waiting}
+              tone="wait"
+              icon={Inbox}
+              note="Pending and under review"
+              onClick={() => setTab("submissions")}
+            />
+            <StatTile
+              index={1}
+              label="Meeting requests to screen"
+              value={meetingsWaiting}
+              tone="move"
+              icon={CalendarDays}
+              note="Not yet sent to the Director"
+              onClick={() => setTab("meetings")}
+            />
+            <StatTile
+              index={2}
+              label="Approved applications"
+              value={approved}
+              tone="clear"
+              icon={CheckCircle2}
+              note="Cleared end to end"
+            />
+            <StatTile
+              index={3}
+              label="Active practitioners"
+              value={activePractitioners}
+              tone="idle"
+              icon={BadgeCheck}
+              note={`${practitioners.data.length} on the register`}
+              onClick={() => setTab("practitioners")}
+            />
           </div>
-          <div className="flex items-center gap-2 text-sm text-muted-foreground bg-white border rounded-lg px-3 py-2">
-            <Calendar className="h-4 w-4" />
-            {new Date().toLocaleDateString("en-NG", { weekday: "long", year: "numeric", month: "long", day: "numeric" })}
+
+          <div className="grid gap-4 lg:grid-cols-5">
+            <Panel
+              className="lg:col-span-3"
+              title="Latest submissions"
+              description="Newest first, across both application routes"
+              actions={
+                <button
+                  type="button"
+                  onClick={() => setTab("submissions")}
+                  className="rounded-lg border border-border px-2.5 py-1.5 text-[12.5px] font-semibold transition-colors hover:bg-muted"
+                >
+                  Open queue
+                </button>
+              }
+              bodyClassName="p-3 sm:p-4"
+            >
+              {submissions.loading ? (
+                <RowsSkeleton rows={5} columns={4} />
+              ) : !rows.length ? (
+                <EmptyState
+                  icon={FileText}
+                  title="No submissions yet"
+                  description="Applications filed from the public portal land here the moment they're submitted."
+                />
+              ) : (
+                <ul className="divide-y divide-border">
+                  {rows.slice(0, 6).map((row, i) => (
+                    <li
+                      key={`${row.source}-${row.id}`}
+                      style={{ ["--i" as string]: Math.min(i, 6) }}
+                      className="reveal flex items-center gap-3 py-3 first:pt-0 last:pb-0"
+                    >
+                      <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-muted font-display text-[11.5px] font-semibold text-muted-foreground">
+                        {initials(row.companyName || row.applicantName)}
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-[13.5px] font-medium text-foreground">
+                          {row.applicantName ?? "Unnamed applicant"}
+                        </p>
+                        <p className="truncate text-[12px] text-muted-foreground">
+                          {truncate(row.applicationType, 40)} · {formatDate(row.createdAt)}
+                        </p>
+                      </div>
+                      <StatusPill status={row.status} />
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </Panel>
+
+            <Panel
+              className="lg:col-span-2"
+              title="Recent activity"
+              description="Every decision recorded across the directorate"
+              bodyClassName="p-3 sm:p-4"
+            >
+              {activity.loading ? (
+                <RowsSkeleton rows={4} columns={2} />
+              ) : !activity.data.length ? (
+                <EmptyState
+                  icon={ClipboardList}
+                  title="No activity recorded"
+                  description="Forwarding, approving or rejecting an application writes an entry here."
+                />
+              ) : (
+                <ol className="space-y-3.5">
+                  {activity.data.map((entry, i) => {
+                    const tone = toneForStatus(entry.action)
+                    return (
+                      <li
+                        key={entry.id}
+                        style={{ ["--i" as string]: Math.min(i, 8) }}
+                        className="reveal flex gap-3"
+                      >
+                        <span
+                          className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${TONE[tone].dot}`}
+                          aria-hidden
+                        />
+                        <div className="min-w-0">
+                          <p className="text-[13px] font-medium leading-snug text-foreground">
+                            {entry.action ?? "Update"}
+                          </p>
+                          <p className="mt-0.5 text-[11.5px] text-muted-foreground">
+                            {entry.userId ? `${entry.userId} · ` : ""}
+                            {timeAgo(entry.timestamp)}
+                          </p>
+                        </div>
+                      </li>
+                    )
+                  })}
+                </ol>
+              )}
+            </Panel>
           </div>
         </div>
+      ) : null}
 
-        <Tabs defaultValue="overview" value={activeTab} onValueChange={setActiveTab} className="space-y-4">
-          <div className="bg-white border rounded-xl p-1 inline-flex">
-            <TabsList className="bg-transparent gap-1 h-auto">
-              {[
-                { value: "overview", label: "Overview" },
-                { value: "submissions", label: "Submissions" },
-                { value: "meeting-requests", label: "Meeting Requests" },
-                { value: "practitioners", label: "Practitioners" },
-                { value: "chat", label: "Chat", badge: 2 },
-                { value: "tasks", label: "Tasks", badge: 3 },
-                { value: "notifications", label: "Notifications", badge: unreadNotifications > 0 ? unreadNotifications : null },
-              ].map(({ value, label, badge }) => (
-                <TabsTrigger
-                  key={value}
-                  value={value}
-                  className="rounded-lg data-[state=active]:bg-slate-900 data-[state=active]:text-white data-[state=active]:shadow-sm h-9 px-4 text-sm font-medium gap-2"
-                >
-                  {label}
-                  {badge && (
-                    <span className="inline-flex items-center justify-center h-5 min-w-5 px-1 rounded-full bg-red-500 text-white text-[10px] font-bold">
-                      {badge}
-                    </span>
-                  )}
-                </TabsTrigger>
-              ))}
-            </TabsList>
-          </div>
+      {tab === "submissions" ? (
+        <div className="space-y-5">
+          <PageHeading
+            title="Submissions"
+            description="Review what has been filed, then forward it to Business Development or the Director."
+          />
+          <CsuSubmissions />
+        </div>
+      ) : null}
 
-          {/* ── OVERVIEW ──────────────────────────────────────────────── */}
-          <TabsContent value="overview" className="space-y-6">
-            {/* Stat Cards */}
-            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-              {[
-                {
-                  title: "Pending Submissions",
-                  value: pendingSubmissions,
-                  change: "+3 this week",
-                  icon: Clock,
-                  gradient: "from-amber-500 to-orange-500",
-                  bg: "bg-amber-50",
-                  iconColor: "text-amber-600",
-                },
-                {
-                  title: "Approved Submissions",
-                  value: approvedSubmissions,
-                  change: "+2 this week",
-                  icon: CheckCircle,
-                  gradient: "from-emerald-500 to-green-600",
-                  bg: "bg-emerald-50",
-                  iconColor: "text-emerald-600",
-                },
-                {
-                  title: "Registered Practitioners",
-                  value: practitioners,
-                  change: "+5 this month",
-                  icon: Users,
-                  gradient: "from-violet-500 to-purple-600",
-                  bg: "bg-violet-50",
-                  iconColor: "text-violet-600",
-                },
-              ].map((stat) => (
-                <Card key={stat.title} className="border-0 shadow-sm overflow-hidden">
-                  <CardContent className="p-0">
-                    <div className={`bg-gradient-to-br ${stat.gradient} p-5 text-white`}>
-                      <div className="flex items-start justify-between">
-                        <div>
-                          <p className="text-white/80 text-sm font-medium">{stat.title}</p>
-                          <p className="text-4xl font-bold mt-2">{stat.value}</p>
-                        </div>
-                        <div className="h-12 w-12 rounded-2xl bg-white/20 flex items-center justify-center">
-                          <stat.icon className="h-6 w-6 text-white" />
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-1 mt-4 text-white/70 text-xs">
-                        <TrendingUp className="h-3 w-3" />
-                        {stat.change}
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-              ))}
-            </div>
+      {tab === "register" ? (
+        <div className="space-y-5">
+          <PageHeading
+            title="Permit register"
+            description="Everyone currently holding a live DOAS permit. First-party holders are entered by the Director, third-party holders by you."
+          />
+          <RegisterPanel />
+        </div>
+      ) : null}
 
-            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-7">
-              {/* Recent Submissions */}
-              <Card className="col-span-4 border-0 shadow-sm">
-                <CardHeader className="pb-3">
-                  <div className="flex items-center justify-between">
-                    <CardTitle className="text-base font-semibold">Recent Submissions</CardTitle>
-                    <button
-                      onClick={() => setActiveTab("submissions")}
-                      className="text-xs text-primary flex items-center gap-1 hover:underline"
-                    >
-                      View all <ArrowUpRight className="h-3 w-3" />
-                    </button>
-                  </div>
-                </CardHeader>
-                <CardContent>
-                  <div className="space-y-4">
-                    {recentSubmissions.map((item, i) => (
-                      <div key={i} className="flex items-center gap-4 p-3 rounded-xl hover:bg-muted/40 transition-colors">
-                        <Avatar className="h-10 w-10 border-2 border-white shadow-sm">
-                          <AvatarFallback className="bg-indigo-100 text-indigo-700 text-xs font-bold">
-                            {item.avatar}
-                          </AvatarFallback>
-                        </Avatar>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium truncate">{item.name}</p>
-                          <p className="text-xs text-muted-foreground">{item.type}</p>
-                        </div>
-                        <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium border ${item.statusColor}`}>
-                          {item.status}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                </CardContent>
-              </Card>
+      {tab === "meetings" ? (
+        <div className="space-y-5">
+          <PageHeading
+            title="Meeting requests"
+            description="Screen visitor requests before they reach the Director's diary."
+          />
+          <MeetingRequestsPanel />
+        </div>
+      ) : null}
 
-              {/* Recent Activity */}
-              <Card className="col-span-3 border-0 shadow-sm">
-                <CardHeader className="pb-3">
-                  <div className="flex items-center justify-between">
-                    <CardTitle className="text-base font-semibold">Recent Activity</CardTitle>
-                    <button
-                      onClick={() => setActiveTab("notifications")}
-                      className="relative"
-                    >
-                      <Bell className="h-4 w-4 text-muted-foreground" />
-                      {unreadNotifications > 0 && (
-                        <span className="absolute -top-1 -right-1 h-3.5 w-3.5 bg-red-500 rounded-full flex items-center justify-center text-[8px] text-white font-bold">
-                          {unreadNotifications}
-                        </span>
-                      )}
-                    </button>
-                  </div>
-                  <CardDescription className="text-xs">
-                    {unreadNotifications} unread notification{unreadNotifications !== 1 ? "s" : ""}
-                  </CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <div className="space-y-4">
-                    {recentActivity.map((item, i) => (
-                      <div key={i} className="flex items-start gap-3">
-                        <div className={`h-8 w-8 rounded-xl ${item.bg} flex items-center justify-center flex-shrink-0`}>
-                          <item.icon className={`h-4 w-4 ${item.color}`} />
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium leading-snug">{item.text}</p>
-                          <p className="text-xs text-muted-foreground mt-0.5">{item.time}</p>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </CardContent>
-              </Card>
-            </div>
-          </TabsContent>
+      {tab === "practitioners" ? (
+        <div className="space-y-5">
+          <PageHeading
+            title="Practitioners"
+            description="The register of licensed signage practitioners and the firms they work for."
+          />
+          <PractitionerUploadPanel />
+        </div>
+      ) : null}
 
-          {/* ── SUBMISSIONS ───────────────────────────────────────────── */}
-          <TabsContent value="submissions">
-            <Card className="border-0 shadow-sm">
-              <CardHeader>
-                <CardTitle className="text-base">Submissions Management</CardTitle>
-                <CardDescription>
-                  Manage {isFirstParty ? "first-party" : "third-party"} submissions — review, forward, or reject applications
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                <SubmissionsTable />
-              </CardContent>
-            </Card>
-          </TabsContent>
+      {tab === "chat" ? (
+        <div className="space-y-5">
+          <PageHeading title="Chat" description="Talk to the other desks without leaving the file." />
+          <ChatPanel
+            role="csu"
+            channels={[
+              { id: "director", name: "Director" },
+              { id: "business_development", name: "Business Development" },
+              { id: "finance", name: "Finance & Admin" },
+              { id: "planning", name: "Planning & Development" },
+              { id: "monitoring", name: "Monitoring & Enforcement" },
+            ]}
+          />
+        </div>
+      ) : null}
 
-          {/* ── MEETING REQUESTS ──────────────────────────────────────── */}
-          <TabsContent value="meeting-requests">
-            <MeetingRequestsPanel />
-          </TabsContent>
+      {tab === "tasks" ? (
+        <div className="space-y-5">
+          <PageHeading title="Tasks" description="Follow-ups that don't belong to a single application." />
+          <TasksPanel unit="CSU" />
+        </div>
+      ) : null}
 
-          {/* ── PRACTITIONERS ────────────────────────────────────────── */}
-          <TabsContent value="practitioners">
-            <PractitionerUploadPanel />
-          </TabsContent>
-
-          {/* ── CHAT / TASKS / NOTIFICATIONS ─────────────────────────── */}
-          <TabsContent value="chat">
-            <ChatPanel department="CSU" />
-          </TabsContent>
-
-          <TabsContent value="tasks">
-            <TasksPanel department="CSU" />
-          </TabsContent>
-
-          <TabsContent value="notifications">
-            <NotificationsPanel department="CSU" />
-          </TabsContent>
-        </Tabs>
-      </div>
-    </div>
+      {tab === "notifications" || tab === "settings" ? (
+        <div className="space-y-5">
+          <PageHeading title="Notifications" description="Everything routed to the CSU desk." />
+          <NotificationsPanel audience="csu" />
+        </div>
+      ) : null}
+    </DashboardShell>
   )
 }

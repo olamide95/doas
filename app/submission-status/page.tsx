@@ -1,576 +1,493 @@
-// app/submission-status/page.tsx
 "use client"
 
-import { useState, useEffect } from "react"
-import { useRouter } from "next/navigation"
-import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { Badge } from "@/components/ui/badge"
-import { Loader2, CheckCircle, XCircle, Clock, AlertCircle, Search, Home, FileText, Upload, DollarSign } from "lucide-react"
+import * as React from "react"
+import { Suspense } from "react"
 import Link from "next/link"
-import { collection, query, where, getDocs, updateDoc, doc, arrayUnion, addDoc } from "firebase/firestore"
-import { getStorage, ref, uploadBytes, getDownloadURL } from "firebase/storage"
-import { v4 as uuidv4 } from "uuid"
-import { db } from "@/lib/firebase"
+import { useSearchParams } from "next/navigation"
+import { addDoc, collection, doc, updateDoc } from "firebase/firestore"
+import { getDownloadURL, ref, uploadBytes } from "firebase/storage"
+import {
+  ArrowRight,
+  Check,
+  Home,
+  Loader2,
+  Paperclip,
+  PencilLine,
+  Search,
+  Upload,
+} from "lucide-react"
+import { COL, db, storage } from "@/lib/firebase"
+import {
+  MEETING_STATUS,
+  STATUS,
+  MEETING_STAGES,
+  meetingDecided,
+  meetingStageIndex,
+  stageIndex,
+  stagesFor,
+} from "@/lib/workflow"
+import {
+  applicantMessage,
+  awaitingPayment,
+  findRecord,
+  isEditable,
+  meetingMessage,
+  type FoundRecord,
+} from "@/lib/applicant"
+import { formatDate, formatDateTime, naira } from "@/lib/format"
+import { toast } from "@/components/ui/toast"
+import { ActionButton } from "@/components/dashboard/form-kit"
+import { Field, Panel, SectionLabel, StatusPill, TONE } from "@/components/dashboard/kit"
+import { cn } from "@/lib/utils"
 
-const storage = getStorage()
+function StatusPageInner() {
+  const params = useSearchParams()
+  const [reference, setReference] = React.useState(params.get("id") ?? "")
+  const [looking, setLooking] = React.useState(false)
+  const [found, setFound] = React.useState<FoundRecord | null>(null)
+  const [missing, setMissing] = React.useState(false)
+  const [proof, setProof] = React.useState<File | null>(null)
+  const [uploading, setUploading] = React.useState(false)
 
-export default function SubmissionStatus() {
-  const router = useRouter()
-  const [submissionId, setSubmissionId] = useState("")
-  const [isLoading, setIsLoading] = useState(false)
-  const [submission, setSubmission] = useState<any>(null)
-  const [error, setError] = useState<string | null>(null)
-  const [uploadingPayment, setUploadingPayment] = useState(false)
-  const [paymentFile, setPaymentFile] = useState<File | null>(null)
-
-  const checkStatus = async () => {
-    if (!submissionId.trim()) {
-      setError("Please enter a submission ID")
-      return
-    }
-
-    setIsLoading(true)
-    setError(null)
-    setSubmission(null)
-
+  const lookUp = React.useCallback(async (value: string) => {
+    if (!value.trim()) return
+    setLooking(true)
+    setMissing(false)
     try {
-      // First, check in the main submissions collection
-      const q = query(
-        collection(db, "submissions"), 
-        where("submissionId", "==", submissionId.trim())
-      )
-      
-      const querySnapshot = await getDocs(q)
-      
-      if (querySnapshot.empty) {
-        // Check in specific collections with different ID field names
-        const collections = [
-          { name: "firstPartySubmissions", idField: "submissionId" },
-          { name: "thirdPartySubmissions", idField: "submissionId" },
-          { name: "meetingRequests", idField: "requestId" }
-        ]
-        
-        let foundSubmission = null
-        let collectionName = ""
-
-        for (const coll of collections) {
-          const collQuery = query(
-            collection(db, coll.name), 
-            where(coll.idField, "==", submissionId.trim())
-          )
-          const collSnapshot = await getDocs(collQuery)
-          
-          if (!collSnapshot.empty) {
-            foundSubmission = collSnapshot.docs[0].data()
-            foundSubmission.id = collSnapshot.docs[0].id
-            foundSubmission.collection = coll.name
-            foundSubmission.type = coll.name === "meetingRequests" ? "meeting" : "application"
-            
-            // Add the ID field name for reference
-            foundSubmission.idField = coll.idField
-            collectionName = coll.name
-            break
-          }
-        }
-
-        if (!foundSubmission) {
-          setError("No submission found with this ID. Please check your submission ID and try again.")
-        } else {
-          setSubmission(foundSubmission)
-        }
-      } else {
-        const submissionData = querySnapshot.docs[0].data()
-        setSubmission({
-          ...submissionData,
-          id: querySnapshot.docs[0].id,
-          collection: "submissions",
-          type: "application",
-          idField: "submissionId"
-        })
-      }
+      const result = await findRecord(value)
+      setFound(result)
+      setMissing(!result)
     } catch (err) {
-      console.error("Error fetching submission:", err)
-      setError("Failed to fetch submission status. Please try again.")
+      toast.error({
+        title: "Lookup failed",
+        description: err instanceof Error ? err.message : "Check your connection and try again.",
+      })
     } finally {
-      setIsLoading(false)
+      setLooking(false)
     }
-  }
+  }, [])
 
-  const handlePaymentUpload = async () => {
-    if (!paymentFile || !submission) return
+  React.useEffect(() => {
+    const initial = params.get("id")
+    if (initial) lookUp(initial)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const uploadProof = async () => {
+    if (!proof || !found) return
+    setUploading(true)
+    const now = new Date().toISOString()
 
     try {
-      setUploadingPayment(true)
+      const path = `submissions/${found.data.submissionId}/payment-proof-${proof.name.replace(/\s+/g, "-")}`
+      const target = ref(storage, path)
+      await uploadBytes(target, proof, { contentType: proof.type })
+      const url = await getDownloadURL(target)
 
-      // Get the correct ID field
-      const idValue = submission.submissionId || submission.requestId
-      
-      // Upload payment proof
-      const filePath = `payments/${idValue}/${uuidv4()}_${paymentFile.name}`
-      const storageRef = ref(storage, filePath)
-      await uploadBytes(storageRef, paymentFile)
-      const downloadURL = await getDownloadURL(storageRef)
-
-      // Update submission
-      const submissionRef = doc(db, submission.collection, submission.id)
-      const now = new Date().toISOString()
-
-      // Prepare update data based on collection type
-      const updateData: any = {
-        paymentProof: downloadURL,
-        paymentStatus: "Paid",
-        status: "Payment Verified",
-        department: "Director",
+      // Payment is verified by Finance, not by the upload. The file stays put
+      // and only the payment state changes.
+      await updateDoc(doc(db, found.collectionName, found.docId), {
+        billing: { ...(found.data.billing ?? {}), paymentStatus: "Proof uploaded", paymentProof: url },
         updatedAt: now,
-      }
-
-      // Add comments if the field exists
-      if (submission.comments !== undefined) {
-        updateData.comments = arrayUnion({
-          text: "Payment proof uploaded by applicant",
-          timestamp: now,
-          action: "Payment submitted",
-        })
-      }
-
-      await updateDoc(submissionRef, updateData)
-
-      // Log activity (if the collection exists)
-      try {
-        await addDoc(collection(db, "activityLogs"), {
-          submissionId: submission.id,
-          action: "Payment proof uploaded",
-          timestamp: now,
-          userId: "applicant",
-        })
-      } catch (logError) {
-        console.log("Activity log not created (optional)")
-      }
-
-      // Create notification for Director
-      try {
-        await addDoc(collection(db, "notifications"), {
-          userId: "director",
-          content: `Payment proof uploaded for ${submission.fullName || submission.applicantName}`,
-          type: "info",
-          referenceId: submission.id,
-          isRead: false,
-          createdAt: now,
-        })
-      } catch (notifError) {
-        console.log("Notification not created (optional)")
-      }
-
-      // Refresh submission data
-      await checkStatus()
-      setPaymentFile(null)
-      
-      toast({
-        title: "Success",
-        description: "Payment proof uploaded successfully!",
       })
+
+      await addDoc(collection(db, COL.notifications), {
+        userId: "finance",
+        content: `Payment proof uploaded by ${found.data.applicantName ?? "an applicant"} for ${found.data.submissionId}`,
+        type: "info",
+        referenceId: found.docId,
+        isRead: false,
+        createdAt: now,
+      })
+
+      toast.success({
+        title: "Proof uploaded",
+        description: "Finance will confirm your payment and the application will move on.",
+        duration: 8000,
+      })
+      setProof(null)
+      await lookUp(found.data.submissionId)
     } catch (err) {
-      console.error("Error uploading payment:", err)
-      toast({
-        title: "Error",
-        description: "Failed to upload payment proof. Please try again.",
-        variant: "destructive",
+      toast.error({
+        title: "Upload failed",
+        description: err instanceof Error ? err.message : "Check your connection and try again.",
       })
     } finally {
-      setUploadingPayment(false)
+      setUploading(false)
     }
   }
 
-  const getStatusBadge = (status: string) => {
-    const statusLower = status?.toLowerCase() || ""
-    
-    switch (statusLower) {
-      case "approved":
-      case "completed":
-        return (
-          <Badge className="bg-green-500 text-white">
-            <CheckCircle className="h-3 w-3 mr-1" />
-            Approved
-          </Badge>
-        )
-      case "rejected":
-      case "denied":
-        return (
-          <Badge className="bg-red-500 text-white">
-            <XCircle className="h-3 w-3 mr-1" />
-            Rejected
-          </Badge>
-        )
-      case "pending":
-      case "under review":
-        return (
-          <Badge className="bg-yellow-500 text-white">
-            <Clock className="h-3 w-3 mr-1" />
-            Pending Review
-          </Badge>
-        )
-      case "payment pending":
-        return (
-          <Badge className="bg-orange-500 text-white">
-            <DollarSign className="h-3 w-3 mr-1" />
-            Payment Pending
-          </Badge>
-        )
-      case "payment verified":
-        return (
-          <Badge className="bg-blue-500 text-white">
-            <CheckCircle className="h-3 w-3 mr-1" />
-            Payment Verified
-          </Badge>
-        )
-      default:
-        return <Badge className="bg-gray-500">{status}</Badge>
-    }
-  }
+  const data = found?.data
+  const isMeeting = found?.kind === "meeting"
 
-  const getStatusMessage = (status: string, type: string = "application") => {
-    const statusLower = status?.toLowerCase() || ""
-    
-    if (statusLower === "payment pending") {
-      return "Your invoice has been generated. Please make payment and upload proof below."
-    }
-    
-    if (type === "meeting") {
-      switch (statusLower) {
-        case "approved":
-        case "completed":
-          return "Your meeting request has been approved. You will receive a confirmation email with meeting details."
-        case "rejected":
-        case "denied":
-          return "Your meeting request has been declined. Please contact our office for more information."
-        case "pending":
-        case "under review":
-          return "Your meeting request is currently under review by our Customer Service Unit."
-        default:
-          return "Your meeting request is being processed."
-      }
-    } else {
-      switch (statusLower) {
-        case "approved":
-        case "completed":
-          return "Your application has been approved. Please check your email for further instructions and permit details."
-        case "rejected":
-        case "denied":
-          return "Your application has been rejected. Please contact our office for more information or submit a new application."
-        case "pending":
-        case "under review":
-          return "Your application is currently under review. Please check back later for updates."
-        default:
-          return "Your application is being processed."
-      }
-    }
-  }
+  const message = !data
+    ? null
+    : isMeeting
+      ? meetingMessage(data.status)
+      : applicantMessage(data.status, (found as { route: "first" | "third" }).route)
 
-  const getStatusColor = (status: string) => {
-    const statusLower = status?.toLowerCase() || ""
-    
-    switch (statusLower) {
-      case "approved":
-      case "completed":
-        return "bg-green-50 text-green-700 border-green-200"
-      case "rejected":
-      case "denied":
-        return "bg-red-50 text-red-700 border-red-200"
-      case "pending":
-      case "under review":
-        return "bg-yellow-50 text-yellow-700 border-yellow-200"
-      case "payment pending":
-        return "bg-orange-50 text-orange-700 border-orange-200"
-      case "payment verified":
-        return "bg-blue-50 text-blue-700 border-blue-200"
-      default:
-        return "bg-gray-50 text-gray-700 border-gray-200"
-    }
-  }
+  const stages = !found
+    ? []
+    : isMeeting
+      ? MEETING_STAGES
+      : stagesFor((found as { route: "first" | "third" }).route)
 
-  const getApplicantName = (submission: any) => {
-    return submission.fullName || submission.applicantName || "N/A"
-  }
+  const current = !found
+    ? -1
+    : isMeeting
+      ? meetingStageIndex(data?.status)
+      : stageIndex((found as { route: "first" | "third" }).route, data?.status)
 
-  const getCompanyName = (submission: any) => {
-    return submission.organization || submission.companyName || null
-  }
+  const blocked = isMeeting
+    ? (data?.status ?? "").toLowerCase() === MEETING_STATUS.declined
+    : message?.tone === "stop" || data?.status === STATUS.changesRequested
 
-  const getSubmissionId = (submission: any) => {
-    return submission.submissionId || submission.requestId || "N/A"
-  }
-
-  // Add this missing toast function
-  const toast = ({ title, description, variant }: { title: string; description: string; variant?: "destructive" }) => {
-    // You can implement this with your actual toast library
-    alert(`${title}: ${description}`);
-  }
+  const formRoute = isMeeting ? null : (found as { route: "first" | "third" } | null)?.route
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 to-blue-50 py-8">
-      <div className="container mx-auto px-4">
-        <Card className="max-w-2xl mx-auto shadow-2xl border-0">
-          <CardHeader className="bg-gradient-to-r from-blue-600 to-blue-800 text-white rounded-t-lg">
-            <div className="flex items-center gap-3">
-              <div className="h-12 w-12 rounded-xl bg-white/20 flex items-center justify-center">
-                <Search className="h-6 w-6 text-white" />
-              </div>
-              <div>
-                <CardTitle className="text-2xl">Check Submission Status</CardTitle>
-                <CardDescription className="text-blue-100">
-                  Enter your submission ID to track the status of your application or meeting request
-                </CardDescription>
-              </div>
-            </div>
-          </CardHeader>
-          <CardContent className="p-6 space-y-6">
-            <div className="space-y-4">
-              <Label htmlFor="submissionId" className="text-lg font-medium">
-                Submission / Request ID
-              </Label>
-              <div className="flex gap-3">
-                <Input
-                  id="submissionId"
-                  value={submissionId}
-                  onChange={(e) => setSubmissionId(e.target.value)}
-                  placeholder="Enter your submission or request ID"
-                  className="flex-1 text-lg py-6"
-                  onKeyPress={(e) => e.key === 'Enter' && checkStatus()}
-                />
-                <Button 
-                  onClick={checkStatus} 
-                  disabled={isLoading}
-                  className="bg-blue-600 hover:bg-blue-700 py-6 px-8"
-                >
-                  {isLoading ? (
-                    <>
-                      <Loader2 className="mr-2 h-5 w-5 animate-spin" />
-                      Checking...
-                    </>
-                  ) : (
-                    <>
-                      <Search className="mr-2 h-5 w-5" />
-                      Check Status
-                    </>
-                  )}
-                </Button>
-              </div>
-            </div>
+    <div className="min-h-screen bg-background py-8">
+      <div className="mx-auto w-full max-w-3xl px-4">
+        <header className="mb-6">
+          <h1 className="font-display text-[26px] font-semibold text-foreground sm:text-[30px]">
+            Track your application
+          </h1>
+          <p className="mt-1 max-w-[62ch] text-[13.5px] leading-relaxed text-muted-foreground">
+            Enter the reference you were given. Applications look like FP-1737… or TP-1737…, meeting
+            requests like MR-1737….
+          </p>
+        </header>
 
-            {error && (
-              <div className="p-4 bg-red-50 text-red-700 rounded-lg border border-red-200 flex items-center gap-3">
-                <AlertCircle className="h-5 w-5 text-red-600 flex-shrink-0" />
-                <div>
-                  <p className="font-medium">Error</p>
-                  <p>{error}</p>
+        <Panel bodyClassName="p-4 sm:p-5">
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <input
+              value={reference}
+              onChange={(event) => setReference(event.target.value)}
+              onKeyDown={(event) => event.key === "Enter" && lookUp(reference)}
+              placeholder="Your application reference"
+              className="flex-1 rounded-lg border border-input bg-card px-3.5 py-2.5 text-[13.5px] font-mono outline-none transition-colors focus:border-ring"
+            />
+            <ActionButton
+              icon={looking ? Loader2 : Search}
+              onClick={() => lookUp(reference)}
+              disabled={looking || !reference.trim()}
+            >
+              {looking ? "Checking…" : "Check"}
+            </ActionButton>
+          </div>
+
+          {missing ? (
+            <p className="mt-3 text-[13px] text-[hsl(var(--state-stop))]">
+              No application matches that reference. Check for typos — it's case sensitive.
+            </p>
+          ) : null}
+        </Panel>
+
+        {found && data && message ? (
+          <div className="mt-4 space-y-4">
+            {/* ---- What's happening, in one line ---- */}
+            <Panel bodyClassName="p-4 sm:p-5">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="font-display text-[18px] font-semibold text-foreground">
+                    {message.headline}
+                  </p>
+                  <p className="mt-1 max-w-[60ch] text-[13.5px] leading-relaxed text-muted-foreground">
+                    {message.body}
+                  </p>
                 </div>
+                <StatusPill status={data.status} />
               </div>
-            )}
 
-            {submission && (
-              <div className="space-y-6">
-                <div className={`p-6 rounded-lg border-2 ${getStatusColor(submission.status)}`}>
-                  <div className="flex justify-between items-start mb-4">
-                    <div>
-                      <h3 className="text-xl font-bold mb-2">
-                        {submission.type === "meeting" ? "Meeting Request Details" : "Application Details"}
-                      </h3>
-                      <p className="text-lg font-semibold">{getApplicantName(submission)}</p>
-                      {getCompanyName(submission) && (
-                        <p className="text-sm text-slate-600">{getCompanyName(submission)}</p>
-                      )}
-                    </div>
-                    {getStatusBadge(submission.status)}
-                  </div>
-
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
-                    <div>
-                      <p className="text-sm font-medium text-slate-600">ID</p>
-                      <p className="font-mono font-bold">{getSubmissionId(submission)}</p>
-                    </div>
-                    <div>
-                      <p className="text-sm font-medium text-slate-600">Type</p>
-                      <p className="font-medium capitalize">
-                        {submission.type === "meeting" 
-                          ? "Meeting Request" 
-                          : submission.applicationType || submission.purposeOfApplication || "Application"}
-                      </p>
-                    </div>
-                    <div>
-                      <p className="text-sm font-medium text-slate-600">Current Department</p>
-                      <p className="font-medium">{submission.department || "CSU"}</p>
-                    </div>
-                    <div>
-                      <p className="text-sm font-medium text-slate-600">Status</p>
-                      <p className="font-medium">{submission.status}</p>
-                    </div>
-                  </div>
-
-                  {/* Purpose/Purpose of Meeting */}
-                  {(submission.purpose || submission.description || submission.purposeOfApplication) && (
-                    <div className="mb-4">
-                      <p className="text-sm font-medium text-slate-600 mb-1">Purpose</p>
-                      <p className="p-3 bg-white/50 rounded-lg">
-                        {submission.purpose || submission.description || submission.purposeOfApplication}
-                      </p>
-                    </div>
-                  )}
-
-                  {/* Meeting-specific fields */}
-                  {submission.type === "meeting" && submission.preferredDate && (
-                    <div className="grid grid-cols-2 gap-4 mb-4">
-                      <div>
-                        <p className="text-sm font-medium text-slate-600">Preferred Date</p>
-                        <p className="font-medium">{new Date(submission.preferredDate).toLocaleDateString()}</p>
-                      </div>
-                      <div>
-                        <p className="text-sm font-medium text-slate-600">Preferred Time</p>
-                        <p className="font-medium">{submission.preferredTime}</p>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* First Party specific fields */}
-                  {submission.collection === "firstPartySubmissions" && (
-                    <div className="grid grid-cols-2 gap-4 mb-4">
-                      {submission.numberOfSigns && (
-                        <div>
-                          <p className="text-sm font-medium text-slate-600">Number of Signs</p>
-                          <p className="font-medium">{submission.numberOfSigns}</p>
-                        </div>
-                      )}
-                      {submission.typeOfSign && (
-                        <div>
-                          <p className="text-sm font-medium text-slate-600">Type of Sign</p>
-                          <p className="font-medium">{submission.typeOfSign}</p>
-                        </div>
-                      )}
-                      {submission.signDimensions && (
-                        <div>
-                          <p className="text-sm font-medium text-slate-600">Sign Dimensions</p>
-                          <p className="font-medium">{submission.signDimensions}</p>
-                        </div>
-                      )}
-                      {submission.structuralHeight && (
-                        <div>
-                          <p className="text-sm font-medium text-slate-600">Structural Height</p>
-                          <p className="font-medium">{submission.structuralHeight}</p>
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  <div className="p-4 rounded-lg bg-white/50">
-                    <p className="font-medium">
-                      {getStatusMessage(submission.status, submission.type)}
-                    </p>
-                  </div>
-
-                  {submission.billing && (
-                    <div className="mt-4 p-4 bg-white rounded-lg border">
-                      <h4 className="font-bold mb-2">Billing Information</h4>
-                      <div className="space-y-2">
-                        <div className="flex justify-between">
-                          <span>Application Fee:</span>
-                          <span className="font-bold">₦{submission.billing.applicationFee?.toLocaleString()}</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span>Processing Fee:</span>
-                          <span className="font-bold">₦{submission.billing.processingFee?.toLocaleString()}</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span>Annual Fee:</span>
-                          <span className="font-bold">₦{submission.billing.annualFee?.toLocaleString()}</span>
-                        </div>
-                        <div className="flex justify-between border-t pt-2">
-                          <span className="font-bold">Total:</span>
-                          <span className="font-bold text-lg">₦{submission.billing.totalAmount?.toLocaleString()}</span>
-                        </div>
-                        {submission.billing.invoiceNumber && (
-                          <div className="text-sm text-slate-600">
-                            Invoice: {submission.billing.invoiceNumber}
-                          </div>
+              {/* ---- Where it is ---- */}
+              <ol className="mt-5 flex items-stretch gap-1">
+                {stages.map((entry, index) => {
+                  const done = current > index
+                  const active = current === index && !blocked
+                  return (
+                    <li key={entry.label} className="min-w-0 flex-1">
+                      <span
+                        className={cn(
+                          "block h-1 rounded-full",
+                          blocked
+                            ? "bg-[hsl(var(--state-stop))]/30"
+                            : done
+                              ? "bg-[hsl(var(--state-clear))]"
+                              : active
+                                ? "bg-[hsl(var(--state-wait))]"
+                                : "bg-border",
                         )}
-                      </div>
-                    </div>
+                      />
+                      <p
+                        className={cn(
+                          "mt-1.5 truncate text-[10.5px] leading-tight",
+                          active ? "font-semibold text-foreground" : "text-muted-foreground",
+                        )}
+                      >
+                        {done ? <Check className="mr-0.5 inline h-2.5 w-2.5" aria-hidden /> : null}
+                        {entry.label}
+                      </p>
+                    </li>
+                  )
+                })}
+              </ol>
+            </Panel>
+
+            {/* ---- The Director's answer on a meeting request ---- */}
+            {isMeeting && meetingDecided(data.status) ? (
+              <div
+                className={cn(
+                  "rounded-xl border p-4 sm:p-5",
+                  blocked
+                    ? "border-[hsl(var(--state-stop))]/30 bg-[hsl(var(--state-stop-soft))]"
+                    : "border-[hsl(var(--state-clear))]/30 bg-[hsl(var(--state-clear-soft))]",
+                )}
+              >
+                <p
+                  className={cn(
+                    "text-[12.5px] font-semibold",
+                    blocked ? "text-[hsl(var(--state-stop))]" : "text-[hsl(var(--state-clear))]",
                   )}
+                >
+                  The Director&rsquo;s decision
+                </p>
+                <p className="mt-1.5 text-[14px] leading-relaxed text-foreground">
+                  {data.directorComment
+                    ? data.directorComment
+                    : blocked
+                      ? "No further reason was given. Customer Service can tell you more."
+                      : "Your request was approved. Customer Service will be in touch to confirm the time."}
+                </p>
+                {data.responseDate ? (
+                  <p className="mt-2 text-[11.5px] text-muted-foreground">
+                    Decided {formatDateTime(data.responseDate)}
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
+
+            {/* ---- Meeting request details ---- */}
+            {isMeeting ? (
+              <Panel title="Your request" bodyClassName="p-4 sm:p-5">
+                <div className="grid grid-cols-2 gap-4">
+                  <Field label="Reference" value={data.requestId ?? data.submissionId} mono />
+                  <Field label="Submitted" value={formatDateTime(data.createdAt)} />
+                  <Field label="Name" value={data.fullName} />
+                  <Field label="Organisation" value={data.organization} />
+                  <Field label="Email" value={data.email} />
+                  <Field label="Phone" value={data.phoneNumber} />
+                  <Field label="Preferred date" value={formatDate(data.preferredDate)} />
+                  <Field label="Preferred time" value={data.preferredTime} />
+                  <Field label="Purpose" value={data.purpose} className="col-span-2" />
                 </div>
 
-                {/* Payment Upload Section */}
-                {submission.status === "Payment Pending" && (
-                  <div className="p-6 bg-orange-50 rounded-lg border-2 border-orange-200">
-                    <h4 className="text-lg font-bold mb-4">Upload Payment Proof</h4>
-                    <div className="space-y-4">
-                      <div>
-                        <Label htmlFor="paymentProof" className="mb-2 block">
-                          Upload proof of payment (PDF, JPG, PNG)
-                        </Label>
-                        <Input
-                          id="paymentProof"
+                {data.supportingDocumentUrl ? (
+                  <p className="mt-4 text-[13px] text-muted-foreground">
+                    Supporting document attached ·{" "}
+                    <a
+                      href={String(data.supportingDocumentUrl)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="font-semibold text-accent underline-offset-4 hover:underline"
+                    >
+                      view what you sent
+                    </a>
+                  </p>
+                ) : null}
+              </Panel>
+            ) : null}
+
+            {/* ---- What you were told to fix ---- */}
+            {!isMeeting && data.directorReason && blocked ? (
+              <div className="rounded-xl border border-[hsl(var(--state-stop))]/30 bg-[hsl(var(--state-stop-soft))] p-4 sm:p-5">
+                <p className="text-[12.5px] font-semibold text-[hsl(var(--state-stop))]">
+                  {data.status === STATUS.changesRequested
+                    ? "What you need to change"
+                    : "Why this was declined"}
+                </p>
+                <p className="mt-1.5 text-[14px] leading-relaxed text-foreground">
+                  {data.directorReason}
+                </p>
+                {isEditable(data.status) ? (
+                  <Link
+                    href={`/submissions/${formRoute === "first" ? "first-party" : "third-party"}?id=${data.submissionId}`}
+                    className="mt-4 inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-[13px] font-semibold text-primary-foreground transition-opacity hover:opacity-90"
+                  >
+                    <PencilLine className="h-4 w-4" />
+                    Update and resubmit
+                  </Link>
+                ) : (
+                  <Link
+                    href={`/submissions/${formRoute === "first" ? "first-party" : "third-party"}`}
+                    className="mt-4 inline-flex items-center gap-1.5 text-[13px] font-semibold text-accent underline-offset-4 hover:underline"
+                  >
+                    File a new application
+                    <ArrowRight className="h-3.5 w-3.5" />
+                  </Link>
+                )}
+              </div>
+            ) : null}
+
+            {/* ---- Invoice and payment ---- */}
+            {!isMeeting && data.billing && Object.keys(data.billing).length ? (
+              <Panel title="Your invoice" bodyClassName="p-4 sm:p-5">
+                <div className="grid grid-cols-2 gap-4">
+                  <Field label="Invoice number" value={data.billing.invoiceNumber} mono />
+                  <Field label="Payment due by" value={formatDate(data.billing.dueDate)} />
+                  <Field label="Application fee" value={naira(data.billing.applicationFee)} />
+                  <Field label="Processing fee" value={naira(data.billing.processingFee)} />
+                  <Field label="Annual fee" value={naira(data.billing.annualFee)} />
+                  {Number(data.billing.penaltyFee) > 0 ? (
+                    <Field label="Penalty" value={naira(data.billing.penaltyFee)} />
+                  ) : null}
+                </div>
+
+                <div className="mt-4 flex items-center justify-between rounded-lg bg-muted/50 px-4 py-3">
+                  <span className="text-[13px] font-medium text-muted-foreground">Total due</span>
+                  <span className="figure text-[22px] font-semibold text-foreground">
+                    {naira(data.billing.totalAmount)}
+                  </span>
+                </div>
+
+                {awaitingPayment(data.status) ? (
+                  <div className="mt-4 border-t border-border pt-4">
+                    <p className="text-[13px] font-semibold text-foreground">
+                      Upload your proof of payment
+                    </p>
+                    <p className="mt-0.5 text-[12.5px] leading-relaxed text-muted-foreground">
+                      A bank teller slip or Remita receipt. Finance confirms it against the invoice
+                      before your application moves on.
+                    </p>
+                    <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center">
+                      <label
+                        htmlFor="payment-proof"
+                        className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-[13px] font-semibold transition-colors hover:bg-muted"
+                      >
+                        <Paperclip className="h-3.5 w-3.5" />
+                        {proof ? "Change file" : "Choose file"}
+                        <input
+                          id="payment-proof"
                           type="file"
                           accept=".pdf,.jpg,.jpeg,.png"
-                          onChange={(e) => setPaymentFile(e.target.files?.[0] || null)}
-                          className="mb-2"
+                          className="hidden"
+                          onChange={(event) => setProof(event.target.files?.[0] ?? null)}
                         />
-                        {paymentFile && (
-                          <p className="text-sm text-green-600">Selected: {paymentFile.name}</p>
-                        )}
-                      </div>
-                      <Button
-                        onClick={handlePaymentUpload}
-                        disabled={!paymentFile || uploadingPayment}
-                        className="w-full"
+                      </label>
+                      {proof ? (
+                        <span className="truncate text-[12.5px] text-muted-foreground">
+                          {proof.name}
+                        </span>
+                      ) : null}
+                      <ActionButton
+                        icon={uploading ? Loader2 : Upload}
+                        disabled={!proof || uploading}
+                        onClick={uploadProof}
                       >
-                        {uploadingPayment ? (
-                          <>
-                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                            Uploading...
-                          </>
-                        ) : (
-                          <>
-                            <Upload className="mr-2 h-4 w-4" />
-                            Upload Payment Proof
-                          </>
-                        )}
-                      </Button>
+                        {uploading ? "Uploading…" : "Send to Finance"}
+                      </ActionButton>
                     </div>
                   </div>
-                )}
+                ) : data.billing.paymentProof ? (
+                  <p className="mt-4 border-t border-border pt-4 text-[13px] text-muted-foreground">
+                    Proof of payment received.{" "}
+                    <a
+                      href={String(data.billing.paymentProof)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="font-semibold text-accent underline-offset-4 hover:underline"
+                    >
+                      View what you sent
+                    </a>
+                  </p>
+                ) : null}
+              </Panel>
+            ) : null}
 
-                {/* Next Steps */}
-                <div className="bg-slate-50 p-4 rounded-lg">
-                  <h4 className="font-semibold mb-2">Next Steps</h4>
-                  <ul className="text-sm text-slate-700 space-y-1">
-                    <li>• Keep your {submission.type === "meeting" ? "request" : "submission"} ID safe for future reference</li>
-                    <li>• Check back regularly for status updates</li>
-                    <li>• Contact our office if you have any questions</li>
-                    <li>• You will receive email notifications for important updates</li>
-                  </ul>
+            {/* ---- Permit ---- */}
+            {!isMeeting && data.permitNumber ? (
+              <Panel bodyClassName="p-4 sm:p-5">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <p className="text-[12.5px] font-medium text-muted-foreground">Permit number</p>
+                    <p className="font-display text-[20px] font-semibold text-foreground">
+                      {data.permitNumber}
+                    </p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-[12.5px] font-medium text-muted-foreground">Valid until</p>
+                    <p className={cn("text-[15px] font-semibold", TONE.clear.text)}>
+                      {formatDate(data.expiresAt)}
+                    </p>
+                  </div>
                 </div>
+              </Panel>
+            ) : null}
+
+            {/* ---- What you filed ---- */}
+            {!isMeeting ? (
+            <Panel title="What you filed" bodyClassName="p-4 sm:p-5">
+              <div className="grid grid-cols-2 gap-4">
+                <Field label="Reference" value={data.submissionId} mono />
+                <Field label="Filed on" value={formatDateTime(data.createdAt)} />
+                <Field label="Applicant" value={data.applicantName} />
+                <Field label="Phone" value={data.contactPhoneNumber} />
+                {data.companyName ? <Field label="Company" value={data.companyName} /> : null}
+                {data.practitionerName ? (
+                  <Field label="Practitioner" value={data.practitionerName} />
+                ) : null}
+                <Field label="Structure" value={data.applicationType} />
+                <Field label="Purpose" value={data.purposeOfApplication} />
+                <Field label="Sign dimensions" value={data.signDimensions} />
+                <Field label="Height" value={data.structuralHeight} />
+                <Field
+                  label="Site"
+                  value={[data.addressLine1, data.addressLine2].filter(Boolean).join(", ")}
+                  className="col-span-2"
+                />
+                <Field label="Coordinates" value={data.gpsCoordinates} mono className="col-span-2" />
               </div>
-            )}
-          </CardContent>
-          <CardFooter className="bg-slate-50 border-t px-6 py-4 flex justify-between">
-            <Button variant="outline" asChild>
-              <Link href="/">
-                <Home className="mr-2 h-4 w-4" />
-                Return to Home
-              </Link>
-            </Button>
-            {submission && submission.type !== "meeting" && (
-              <Button asChild>
-                <Link href={`/submissions/${submission.isFirstParty ? 'first-party' : 'third-party'}?id=${submission.submissionId}`}>
-                  <FileText className="mr-2 h-4 w-4" />
-                  Update Application
-                </Link>
-              </Button>
-            )}
-          </CardFooter>
-        </Card>
+
+              {data.updatedAt ? (
+                <p className="mt-4 text-[12px] text-muted-foreground">
+                  Last updated {formatDateTime(data.updatedAt)}
+                </p>
+              ) : null}
+
+              {isEditable(data.status) && !blocked ? (
+                <div className="mt-4 border-t border-border pt-4">
+                  <SectionLabel>Need to change something?</SectionLabel>
+                  <p className="text-[13px] leading-relaxed text-muted-foreground">
+                    Your application hasn't been sent up for a decision yet, so you can still edit it.
+                  </p>
+                  <Link
+                    href={`/submissions/${formRoute === "first" ? "first-party" : "third-party"}?id=${data.submissionId}`}
+                    className="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-[13px] font-semibold transition-colors hover:bg-muted"
+                  >
+                    <PencilLine className="h-4 w-4" />
+                    Edit application
+                  </Link>
+                </div>
+              ) : null}
+            </Panel>
+            ) : null}
+
+            <Link
+              href="/"
+              className="inline-flex items-center gap-1.5 text-[13px] font-medium text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+            >
+              <Home className="h-3.5 w-3.5" />
+              Back to home
+            </Link>
+          </div>
+        ) : null}
       </div>
     </div>
+  )
+}
+
+export default function SubmissionStatusPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen bg-background" />}>
+      <StatusPageInner />
+    </Suspense>
   )
 }

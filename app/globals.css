@@ -2,85 +2,119 @@
 @tailwind components;
 @tailwind utilities;
 
-body {
-  font-family: Arial, Helvetica, sans-serif;
-}
-
-@layer utilities {
-  .text-balance {
-    text-wrap: balance;
-  }
-}
+/* ------------------------------------------------------------------
+   DOAS design tokens
+   Petrol-pine primary, ochre = awaiting action, emerald = cleared,
+   clay = rejected. Status colour always carries meaning.
+------------------------------------------------------------------- */
 
 @layer base {
   :root {
-    --background: 0 0% 100%;
-    --foreground: 0 0% 3.9%;
+    --font-sans: var(--font-inter), ui-sans-serif, system-ui, -apple-system, sans-serif;
+    --font-display: var(--font-archivo), var(--font-inter), sans-serif;
+
+    --background: 156 8% 95%;
+    --foreground: 165 30% 8%;
+
     --card: 0 0% 100%;
-    --card-foreground: 0 0% 3.9%;
+    --card-foreground: 165 30% 8%;
+
     --popover: 0 0% 100%;
-    --popover-foreground: 0 0% 3.9%;
-    --primary: 0 0% 9%;
-    --primary-foreground: 0 0% 98%;
-    --secondary: 0 0% 96.1%;
-    --secondary-foreground: 0 0% 9%;
-    --muted: 0 0% 96.1%;
-    --muted-foreground: 0 0% 45.1%;
-    --accent: 0 0% 96.1%;
-    --accent-foreground: 0 0% 9%;
-    --destructive: 0 84.2% 60.2%;
-    --destructive-foreground: 0 0% 98%;
-    --border: 0 0% 89.8%;
-    --input: 0 0% 89.8%;
-    --ring: 0 0% 3.9%;
-    --chart-1: 12 76% 61%;
-    --chart-2: 173 58% 39%;
-    --chart-3: 197 37% 24%;
-    --chart-4: 43 74% 66%;
-    --chart-5: 27 87% 67%;
-    --radius: 0.5rem;
-    --sidebar-background: 0 0% 98%;
-    --sidebar-foreground: 240 5.3% 26.1%;
-    --sidebar-primary: 240 5.9% 10%;
-    --sidebar-primary-foreground: 0 0% 98%;
-    --sidebar-accent: 240 4.8% 95.9%;
-    --sidebar-accent-foreground: 240 5.9% 10%;
-    --sidebar-border: 220 13% 91%;
-    --sidebar-ring: 217.2 91.2% 59.8%;
-  }
-  .dark {
-    --background: 0 0% 3.9%;
-    --foreground: 0 0% 98%;
-    --card: 0 0% 3.9%;
-    --card-foreground: 0 0% 98%;
-    --popover: 0 0% 3.9%;
-    --popover-foreground: 0 0% 98%;
-    --primary: 0 0% 98%;
-    --primary-foreground: 0 0% 9%;
-    --secondary: 0 0% 14.9%;
-    --secondary-foreground: 0 0% 98%;
-    --muted: 0 0% 14.9%;
-    --muted-foreground: 0 0% 63.9%;
-    --accent: 0 0% 14.9%;
-    --accent-foreground: 0 0% 98%;
-    --destructive: 0 62.8% 30.6%;
-    --destructive-foreground: 0 0% 98%;
-    --border: 0 0% 14.9%;
-    --input: 0 0% 14.9%;
-    --ring: 0 0% 83.1%;
-    --chart-1: 220 70% 50%;
-    --chart-2: 160 60% 45%;
-    --chart-3: 30 80% 55%;
-    --chart-4: 280 65% 60%;
-    --chart-5: 340 75% 55%;
-    --sidebar-background: 240 5.9% 10%;
-    --sidebar-foreground: 240 4.8% 95.9%;
-    --sidebar-primary: 224.3 76.3% 48%;
+    --popover-foreground: 165 30% 8%;
+
+    --primary: 168 60% 15%;
+    --primary-foreground: 150 30% 97%;
+
+    --secondary: 158 14% 92%;
+    --secondary-foreground: 168 45% 14%;
+
+    --muted: 156 10% 93%;
+    --muted-foreground: 168 8% 40%;
+
+    --accent: 165 68% 27%;
+    --accent-foreground: 0 0% 100%;
+
+    --destructive: 5 59% 44%;
+    --destructive-foreground: 0 0% 100%;
+
+    /* semantic states — used via hsl(var(--x)) */
+    --state-wait: 38 87% 38%;
+    --state-wait-soft: 40 90% 95%;
+    --state-move: 205 72% 38%;
+    --state-move-soft: 205 80% 96%;
+    --state-clear: 163 80% 26%;
+    --state-clear-soft: 160 60% 95%;
+    --state-stop: 5 59% 44%;
+    --state-stop-soft: 6 70% 96%;
+    --state-idle: 168 8% 45%;
+    --state-idle-soft: 156 10% 94%;
+
+    --border: 158 12% 87%;
+    --input: 158 12% 87%;
+    --ring: 165 68% 27%;
+
+    --radius: 0.75rem;
+
+    --chart-1: 168 60% 20%;
+    --chart-2: 165 68% 34%;
+    --chart-3: 38 87% 45%;
+    --chart-4: 205 72% 42%;
+    --chart-5: 5 59% 50%;
+
+    --sidebar-background: 168 42% 11%;
+    --sidebar-foreground: 155 20% 82%;
+    --sidebar-primary: 165 68% 34%;
     --sidebar-primary-foreground: 0 0% 100%;
-    --sidebar-accent: 240 3.7% 15.9%;
-    --sidebar-accent-foreground: 240 4.8% 95.9%;
-    --sidebar-border: 240 3.7% 15.9%;
-    --sidebar-ring: 217.2 91.2% 59.8%;
+    --sidebar-accent: 168 34% 17%;
+    --sidebar-accent-foreground: 0 0% 100%;
+    --sidebar-border: 168 30% 18%;
+    --sidebar-ring: 165 68% 40%;
+  }
+
+  .dark {
+    --background: 168 22% 7%;
+    --foreground: 150 14% 94%;
+
+    --card: 168 20% 10%;
+    --card-foreground: 150 14% 94%;
+
+    --popover: 168 22% 10%;
+    --popover-foreground: 150 14% 94%;
+
+    --primary: 165 55% 60%;
+    --primary-foreground: 168 45% 9%;
+
+    --secondary: 168 16% 16%;
+    --secondary-foreground: 150 14% 94%;
+
+    --muted: 168 16% 15%;
+    --muted-foreground: 155 8% 62%;
+
+    --accent: 165 60% 40%;
+    --accent-foreground: 0 0% 100%;
+
+    --destructive: 5 60% 52%;
+    --destructive-foreground: 0 0% 100%;
+
+    --state-wait: 40 80% 58%;
+    --state-wait-soft: 38 40% 16%;
+    --state-move: 205 70% 62%;
+    --state-move-soft: 205 40% 16%;
+    --state-clear: 162 55% 50%;
+    --state-clear-soft: 162 35% 14%;
+    --state-stop: 5 65% 62%;
+    --state-stop-soft: 5 35% 16%;
+    --state-idle: 155 8% 62%;
+    --state-idle-soft: 168 14% 16%;
+
+    --border: 168 14% 19%;
+    --input: 168 14% 19%;
+    --ring: 165 55% 45%;
+
+    --sidebar-background: 168 26% 8%;
+    --sidebar-foreground: 155 16% 78%;
+    --sidebar-accent: 168 20% 14%;
+    --sidebar-border: 168 20% 15%;
   }
 }
 
@@ -88,7 +122,211 @@ body {
   * {
     @apply border-border;
   }
+
+  html {
+    -webkit-tap-highlight-color: transparent;
+  }
+
   body {
     @apply bg-background text-foreground;
+    font-family: var(--font-sans);
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  h1, h2, h3, h4 {
+    font-family: var(--font-display);
+    letter-spacing: -0.018em;
+  }
+
+  :focus-visible {
+    outline: 2px solid hsl(var(--ring));
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+
+  ::selection {
+    background: hsl(var(--accent) / 0.25);
+  }
+}
+
+@layer utilities {
+  .font-display {
+    font-family: var(--font-display);
+    letter-spacing: -0.02em;
+  }
+
+  /* Lining, tabular figures for anything countable */
+  .figure {
+    font-family: var(--font-display);
+    font-variant-numeric: tabular-nums lining-nums;
+    letter-spacing: -0.03em;
+  }
+
+  .tnum {
+    font-variant-numeric: tabular-nums;
+  }
+
+  .hairline {
+    box-shadow: inset 0 0 0 1px hsl(var(--border));
+  }
+
+  .surface {
+    @apply bg-card;
+    box-shadow:
+      0 1px 2px -1px hsl(168 30% 12% / 0.06),
+      0 0 0 1px hsl(var(--border));
+  }
+
+  .surface-raised {
+    @apply bg-card;
+    box-shadow:
+      0 8px 24px -12px hsl(168 40% 12% / 0.18),
+      0 0 0 1px hsl(var(--border));
+  }
+
+  .scroll-slim {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--border)) transparent;
+  }
+  .scroll-slim::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  .scroll-slim::-webkit-scrollbar-thumb {
+    background: hsl(var(--border));
+    border-radius: 999px;
+  }
+  .scroll-slim::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .grid-paper {
+    background-image:
+      linear-gradient(hsl(var(--border) / 0.5) 1px, transparent 1px),
+      linear-gradient(90deg, hsl(var(--border) / 0.5) 1px, transparent 1px);
+    background-size: 28px 28px;
+  }
+}
+
+/* ------------------------------------------------------------------
+   Motion — one orchestrated reveal on load, the rest responds to input
+------------------------------------------------------------------- */
+
+@keyframes doas-rise {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes doas-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes doas-toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(-10px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes doas-toast-out {
+  to {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.97);
+  }
+}
+
+@keyframes doas-drain {
+  from {
+    transform: scaleX(1);
+  }
+  to {
+    transform: scaleX(0);
+  }
+}
+
+@keyframes doas-shimmer {
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+@keyframes doas-ping {
+  75%,
+  100% {
+    transform: scale(2);
+    opacity: 0;
+  }
+}
+
+.reveal {
+  animation: doas-rise 0.42s cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation-delay: calc(var(--i, 0) * 55ms);
+}
+
+.fade-in {
+  animation: doas-fade 0.3s ease-out both;
+}
+
+.toast-in {
+  animation: doas-toast-in 0.24s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.toast-out {
+  animation: doas-toast-out 0.18s ease-in forwards;
+}
+
+.toast-drain {
+  transform-origin: left;
+  animation: doas-drain linear forwards;
+}
+
+.skeleton {
+  position: relative;
+  overflow: hidden;
+  background: hsl(var(--muted));
+}
+.skeleton::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, hsl(var(--card) / 0.7), transparent);
+  animation: doas-shimmer 1.4s infinite;
+}
+
+.ping-dot::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 999px;
+  background: inherit;
+  animation: doas-ping 1.8s cubic-bezier(0, 0, 0.2, 1) infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }

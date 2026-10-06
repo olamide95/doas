@@ -1,13 +1,6 @@
 import { collection, getDocs, limit, query, where } from "firebase/firestore"
 import { COL, db } from "@/lib/firebase"
-import {
-  MEETING_STATUS,
-  STATUS,
-  isBlocked,
-  meetingDecided,
-  stage,
-  stagesFor,
-} from "@/lib/workflow"
+import { MEETING_STATUS, STATUS, isBlocked, meetingDecided, stage, stagesFor } from "@/lib/workflow"
 
 export type Route = "first" | "third"
 
@@ -16,6 +9,7 @@ export interface FoundApplication {
   docId: string
   route: Route
   collectionName: string
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   data: Record<string, any>
 }
 
@@ -23,80 +17,53 @@ export interface FoundMeeting {
   kind: "meeting"
   docId: string
   collectionName: string
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   data: Record<string, any>
 }
 
 export type FoundRecord = FoundApplication | FoundMeeting
 
-/**
- * Look a record up by whatever reference the person was given.
- *
- * Applications are keyed on `submissionId` (FP-… / TP-…), meeting requests on
- * `requestId` (MR-…). The old status page searched a "submissions" collection
- * that nothing writes to, and never searched meeting requests by requestId at
- * all — so a visitor with an MR reference could never track anything.
- */
-export async function findRecord(reference: string): Promise<FoundRecord | null> {
+async function firstMatch(path: string, field: string, value: string) {
+  const snap = await getDocs(query(collection(db, path), where(field, "==", value), limit(1)))
+  return snap.empty ? null : snap.docs[0]
+}
+
+/** Applications only — the edit form relies on this never returning a meeting. */
+export async function findSubmission(reference: string): Promise<FoundApplication | null> {
   const ref = reference.trim()
   if (!ref) return null
-
-  const applicationSources: { name: string; route: Route }[] = [
-    { name: COL.firstParty, route: "first" },
-    { name: COL.thirdParty, route: "third" },
-  ]
-
-  for (const source of applicationSources) {
-    const snapshot = await getDocs(
-      query(collection(db, source.name), where("submissionId", "==", ref), limit(1)),
-    )
-    if (!snapshot.empty) {
-      const found = snapshot.docs[0]
-      return {
-        kind: "application",
-        docId: found.id,
-        route: source.route,
-        collectionName: source.name,
-        data: found.data(),
-      }
-    }
+  const order: { name: string; route: Route }[] = ref.toUpperCase().startsWith("TP")
+    ? [{ name: COL.thirdParty, route: "third" }, { name: COL.firstParty, route: "first" }]
+    : [{ name: COL.firstParty, route: "first" }, { name: COL.thirdParty, route: "third" }]
+  for (const source of order) {
+    const hit = await firstMatch(source.name, "submissionId", ref)
+    if (hit) return { kind: "application", docId: hit.id, route: source.route, collectionName: source.name, data: hit.data() }
   }
-
-  // Meeting requests. Older documents were saved without a requestId field,
-  // so fall back to submissionId before giving up.
-  for (const field of ["requestId", "submissionId"]) {
-    const snapshot = await getDocs(
-      query(collection(db, COL.meetings), where(field, "==", ref), limit(1)),
-    )
-    if (!snapshot.empty) {
-      const found = snapshot.docs[0]
-      return {
-        kind: "meeting",
-        docId: found.id,
-        collectionName: COL.meetings,
-        data: found.data(),
-      }
-    }
-  }
-
   return null
 }
 
-/** Kept for anything still importing the old name. */
-export const findSubmission = findRecord
+/** Applications first, then meeting requests (older ones were saved without requestId). */
+export async function findRecord(reference: string): Promise<FoundRecord | null> {
+  const ref = reference.trim()
+  if (!ref) return null
+  const application = await findSubmission(ref)
+  if (application) return application
+  for (const field of ["requestId", "submissionId"]) {
+    const hit = await firstMatch(COL.meetings, field, ref)
+    if (hit) return { kind: "meeting", docId: hit.id, collectionName: COL.meetings, data: hit.data() }
+  }
+  return null
+}
 
-/* ------------------------------------------------------------------ *
- * Applications
- * ------------------------------------------------------------------ */
-
-export function isEditable(status?: string): boolean {
+export function isEditable(status?: string | null) {
   return [...stage("withCsu"), STATUS.changesRequested].includes(status ?? "")
 }
 
-export function needsAttention(status?: string): boolean {
+export function needsAttention(status?: string | null) {
   return isBlocked(status)
 }
 
-export function awaitingPayment(status?: string): boolean {
+export function awaitingPayment(status?: string | null) {
   return stage("awaitingPayment").includes(status ?? "")
 }
 
@@ -109,125 +76,49 @@ export interface ApplicantMessage {
 
 export function applicantMessage(status: string | undefined, route: Route): ApplicantMessage {
   const s = status ?? ""
+  const field = route === "first" ? "a Business Development officer" : "Planning's engineers"
+  const msg = (tone: ApplicantMessage["tone"], headline: string, body: string, action: ApplicantMessage["action"] = "none"): ApplicantMessage => ({
+    tone,
+    headline,
+    body,
+    action,
+  })
 
-  if (s === STATUS.declined || s === "Rejected") {
-    return {
-      tone: "stop",
-      headline: "Not approved",
-      body: "The Director has declined this application. The reason is below. You can file a fresh application once the issues are resolved.",
-      action: "new",
-    }
-  }
-
-  if (s === STATUS.changesRequested) {
-    return {
-      tone: "wait",
-      headline: "Changes needed",
-      body: "The Director has sent this back for changes. Read the reason below, update your application, and resubmit it.",
-      action: "edit",
-    }
-  }
-
-  if (awaitingPayment(s)) {
-    return {
-      tone: "wait",
-      headline: "Payment due",
-      body: "Your invoice is ready. Pay the total shown, then upload your proof of payment below.",
-      action: "pay",
-    }
-  }
-
-  if (s === STATUS.registered) {
-    return {
-      tone: "clear",
-      headline: "Permit issued",
-      body: "Your permit is approved and on the register. Keep the permit number for renewal.",
-      action: "none",
-    }
-  }
-
-  if (s === STATUS.approved) {
-    return {
-      tone: "clear",
-      headline: "Approved",
-      body: "The Director has approved your application. Customer Service is entering it on the register now.",
-      action: "none",
-    }
-  }
-
-  if (stage("withCsu").includes(s)) {
-    return {
-      tone: "move",
-      headline: "Received",
-      body: "Your application has been received and is being checked before it goes up for a decision. You can still make changes.",
-      action: "edit",
-    }
-  }
-
-  return {
-    tone: "move",
-    headline: "In progress",
-    body:
-      route === "first"
-        ? "Your application is moving through review, site inspection and billing. The steps above show where it is."
-        : "Your application is moving through review, inspection and planning review. The steps above show where it is.",
-    action: "none",
-  }
+  if (s === STATUS.declined || s === "Rejected")
+    return msg("stop", "Not approved", "The Director has declined this application. The reason is below. You can file a fresh application once the issues are resolved.", "new")
+  if (s === STATUS.changesRequested)
+    return msg("stop", "Changes needed", "The Director has sent this back. Read the reason below, update your application and resubmit.", "edit")
+  if (stage("withCsu").includes(s)) return msg("wait", "Received — being screened", "Customer Service is checking your documents. You can still edit the application.", "edit")
+  if (stage("withDirector").includes(s)) return msg("move", "With the Director", "Your file has passed screening and awaits the Director's first review.")
+  if (stage("siteVisit").includes(s) || stage("planningReview").includes(s))
+    return msg("wait", "Site inspection scheduled", `${field} will visit the site to measure and photograph the signage.`)
+  if ([...stage("visitReported"), ...stage("planningReported"), ...stage("billingQueried")].includes(s))
+    return msg("move", "Inspection complete", "The Director is checking the inspection findings before your bill is prepared.")
+  if (stage("billing").includes(s)) return msg("wait", "Your bill is being prepared", "Billing is applying the gazetted tariff to the measured signage.")
+  if (stage("billProposed").includes(s)) return msg("move", "Bill awaiting sign-off", "The Director is confirming the charges. Your invoice appears here once approved.")
+  if (s === STATUS.partPayment) return msg("stop", "Balance outstanding", "Finance has recorded part of your payment. Pay the balance below and upload the new receipt.", "pay")
+  if (awaitingPayment(s)) return msg("wait", "Payment due", "Pay via Remita or at the bank, then declare your RRR and upload the receipt below.", "pay")
+  if (stage("paymentFlagged").includes(s)) return msg("stop", "Payment under review", "There's a problem verifying your payment. Customer Service will contact you.")
+  if (stage("paymentReconciled").includes(s)) return msg("move", "Payment confirmed", "Finance has verified your payment. The Director signs your permit next.")
+  if (stage("issued").includes(s)) return msg("clear", "Permit issued", "Your permit is on the register. Keep the permit number for inspections and renewal.")
+  return msg("move", "In progress", "The steps above show where your application is.")
 }
 
 export function publicStages(route: Route) {
-  return stagesFor(route).map((entry) => entry.label)
+  return stagesFor(route).map((e) => e.label)
 }
 
-/* ------------------------------------------------------------------ *
- * Meeting requests
- * ------------------------------------------------------------------ */
-
-export function meetingMessage(status?: string): ApplicantMessage {
+export function meetingMessage(status?: string | null): ApplicantMessage {
   const s = (status ?? "").toLowerCase()
-
-  if (s === MEETING_STATUS.declined) {
-    return {
-      tone: "stop",
-      headline: "Not granted",
-      body: "The Director isn't able to take this meeting. Any note he left is below. Customer Service can suggest another way to help.",
-      action: "none",
-    }
-  }
-
-  if (s === MEETING_STATUS.approved || s === MEETING_STATUS.scheduled) {
-    return {
-      tone: "clear",
-      headline: "Meeting granted",
-      body: "The Director has approved your request. Customer Service will contact you to confirm the exact time.",
-      action: "none",
-    }
-  }
-
-  if (s === MEETING_STATUS.completed) {
-    return {
-      tone: "clear",
-      headline: "Meeting held",
-      body: "This request is closed. File a new one if you need to see the Director again.",
-      action: "none",
-    }
-  }
-
-  if (s === MEETING_STATUS.withDirector) {
-    return {
-      tone: "move",
-      headline: "With the Director",
-      body: "Customer Service has passed your request to the Director. You'll see his decision here.",
-      action: "none",
-    }
-  }
-
-  return {
-    tone: "move",
-    headline: "Received",
-    body: "Customer Service has your request and is reviewing it before passing it to the Director.",
-    action: "none",
-  }
+  if (s === MEETING_STATUS.declined)
+    return { tone: "stop", headline: "Not granted", body: "The Director isn't able to take this meeting. Any note he left is below.", action: "none" }
+  if (s === MEETING_STATUS.approved || s === MEETING_STATUS.scheduled)
+    return { tone: "clear", headline: "Meeting granted", body: "Customer Service will contact you to confirm the exact time.", action: "none" }
+  if (s === MEETING_STATUS.completed)
+    return { tone: "clear", headline: "Meeting held", body: "This request is closed. File a new one if you need to see the Director again.", action: "none" }
+  if (s === MEETING_STATUS.withDirector)
+    return { tone: "move", headline: "With the Director", body: "Customer Service has passed your request to the Director.", action: "none" }
+  return { tone: "move", headline: "Received", body: "Customer Service is reviewing your request before passing it on.", action: "none" }
 }
 
 export { meetingDecided }

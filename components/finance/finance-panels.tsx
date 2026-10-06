@@ -1,601 +1,429 @@
 "use client"
 
 import * as React from "react"
-import {
-  Bar,
-  BarChart,
-  CartesianGrid,
-  Cell,
-  Pie,
-  PieChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from "recharts"
-import { BadgeCheck, Receipt, Wallet } from "lucide-react"
-import { DEFAULT_FEES, DEPARTMENT, STATUS, feesTotal, invoiceNumber, stage } from "@/lib/workflow"
-import { formatDate, naira, toDate } from "@/lib/format"
-import {
-  FieldGrid,
-  NumberField,
-  SearchField,
-  TextField,
-  TextareaField,
-} from "@/components/dashboard/form-kit"
-import {
-  WorkQueue,
-  useSubmissions,
-  type QueueDraft,
-  type SubmissionRow,
-} from "@/components/dashboard/work-queue"
-import {
-  EmptyState,
-  LoadFailed,
-  Panel,
-  RowsSkeleton,
-  StatTile,
-  StatusPill,
-} from "@/components/dashboard/kit"
-import { Segmented } from "@/components/dashboard/notifications-panel"
+import { getDownloadURL, ref, uploadBytes } from "firebase/storage"
+import { BadgeCheck, Loader2, Paperclip, Radar, ShieldAlert, SplitSquareHorizontal } from "lucide-react"
+import { storage } from "@/lib/firebase"
+import { DEPARTMENT, LEDGER_CODES, STATUS, ledgerFor, parseDate, stage } from "@/lib/workflow"
+import { formatDate, formatDateTime, naira } from "@/lib/format"
+import { toast } from "@/components/ui/toast"
+import { ActionButton, FieldGrid, NumberField, SelectField, TextField, TextareaField } from "@/components/dashboard/form-kit"
+import { EmptyState, LoadFailed, Panel, RowsSkeleton, SectionLabel, StatusPill, TONE } from "@/components/dashboard/kit"
+import { WorkQueue, useSubmissions, type QueueDraft, type SubmissionRow } from "@/components/dashboard/work-queue"
+import { cn } from "@/lib/utils"
 
-/* ------------------------------------------------------------------ *
- * Billing
- * ------------------------------------------------------------------ */
-
-interface BillingDraft extends Record<string, unknown> {
-  invoiceNumber: string
-  applicationFee: number
-  processingFee: number
-  annualFee: number
-  penaltyFee: number
-  totalAmount: number
-  dueDate: string
-  paymentStatus: string
-  paymentReference: string
-  paidOn: string
-  billingNotes: string
+interface RemitaCheck {
+  configured: boolean
+  found?: boolean
+  paid?: boolean
+  amount?: number
+  transactionTime?: string
+  message?: string
+  checkedAt: string
 }
 
-const inThirtyDays = () =>
-  new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+interface PaymentDraft extends Record<string, unknown> {
+  remitaRrr: string
+  paymentChannel: string
+  amountCredited: number
+  bankTransactionTimestamp: string
+  uploadedRemitaProof: string
+  financeLedgerCode: string
+  reconciliationStatus: string
+  remitaCheck: RemitaCheck | null
+  financeNotes: string
+}
 
-function initialBilling(row: SubmissionRow): BillingDraft {
-  const existing = (row.billing ?? {}) as Partial<BillingDraft>
-  const base: BillingDraft = {
-    invoiceNumber: existing.invoiceNumber ?? invoiceNumber(),
-    applicationFee: Number(existing.applicationFee ?? DEFAULT_FEES.applicationFee),
-    processingFee: Number(existing.processingFee ?? DEFAULT_FEES.processingFee),
-    annualFee: Number(existing.annualFee ?? DEFAULT_FEES.annualFee),
-    penaltyFee: Number(existing.penaltyFee ?? 0),
-    totalAmount: 0,
-    dueDate: existing.dueDate ? String(existing.dueDate).slice(0, 10) : inThirtyDays(),
-    paymentStatus: existing.paymentStatus ?? "Pending",
-    paymentReference: existing.paymentReference ?? "",
-    paidOn: existing.paidOn ? String(existing.paidOn).slice(0, 10) : "",
-    billingNotes: existing.billingNotes ?? "",
+interface Declared {
+  rrr?: string
+  amount?: number
+  proofUrl?: string
+  channel?: string
+  declaredAt?: string
+}
+
+const RECON = [
+  { value: "Unverified", label: "Unverified" },
+  { value: "Reconciled_Match", label: "Reconciled — match" },
+  { value: "Underpaid_Shortfall", label: "Underpaid — shortfall" },
+  { value: "Overpaid_Credit", label: "Overpaid — credit" },
+]
+
+const digits = (v: string) => v.replace(/\D/g, "")
+const expectedOf = (row: SubmissionRow) => Number(row.billing?.netInvoiceAmount ?? row.billing?.totalAmount ?? 0)
+
+function suggest(expected: number, credited: number) {
+  if (!(credited > 0)) return "Unverified"
+  if (Math.abs(credited - expected) < 1) return "Reconciled_Match"
+  return credited < expected ? "Underpaid_Shortfall" : "Overpaid_Credit"
+}
+
+function FinanceDesk({ d, set, row }: { d: PaymentDraft; set: (p: Partial<PaymentDraft>) => void; row: SubmissionRow }) {
+  const [checking, setChecking] = React.useState(false)
+  const [uploading, setUploading] = React.useState(false)
+  const expected = expectedOf(row)
+  const declared = (row.payment?.declared ?? null) as Declared | null
+  const variance = Number(d.amountCredited || 0) - expected
+  const suggested = suggest(expected, Number(d.amountCredited || 0))
+
+  const runCheck = async () => {
+    const rrr = digits(d.remitaRrr)
+    if (rrr.length !== 12) {
+      toast.warning({ title: "RRR must be 12 digits" })
+      return
+    }
+    setChecking(true)
+    try {
+      const res = await fetch(`/api/remita/verify?rrr=${rrr}`)
+      const json = await res.json()
+      const check: RemitaCheck = { ...json, checkedAt: new Date().toISOString() }
+      const patch: Partial<PaymentDraft> = { remitaCheck: check }
+      if (check.paid && check.amount) {
+        patch.amountCredited = check.amount
+        if (check.transactionTime) patch.bankTransactionTimestamp = String(check.transactionTime)
+      }
+      set(patch)
+    } catch (err) {
+      toast.error({ title: "Remita check failed", description: err instanceof Error ? err.message : "Try again." })
+    } finally {
+      setChecking(false)
+    }
   }
-  base.totalAmount = feesTotal(base)
-  return base
+
+  const uploadProof = async (file?: File) => {
+    if (!file) return
+    setUploading(true)
+    try {
+      const target = ref(storage, `finance/${row.id}/bank-proof-${Date.now()}-${file.name.replace(/\s+/g, "-")}`)
+      await uploadBytes(target, file, { contentType: file.type })
+      set({ uploadedRemitaProof: await getDownloadURL(target) })
+    } catch (err) {
+      toast.error({ title: "Upload failed", description: err instanceof Error ? err.message : "Try again." })
+    } finally {
+      setUploading(false)
+    }
+  }
+
+  const check = d.remitaCheck
+
+  return (
+    <div className="space-y-5">
+      <div className="grid grid-cols-2 gap-3 rounded-lg bg-muted/40 p-3.5 text-[12.5px]">
+        <div>
+          <p className="text-muted-foreground">Invoice reference</p>
+          <p className="font-mono font-medium text-foreground">{String(row.billing?.invoiceNumber ?? "—")}</p>
+        </div>
+        <div className="text-right">
+          <p className="text-muted-foreground">Expected payable total</p>
+          <p className="figure text-[18px] font-semibold text-foreground">{naira(expected)}</p>
+        </div>
+      </div>
+
+      <div>
+        <SectionLabel>Client payment proof (portal)</SectionLabel>
+        {declared ? (
+          <div className="grid grid-cols-3 gap-3 text-[13px]">
+            <div>
+              <p className="text-[11.5px] text-muted-foreground">Declared RRR</p>
+              <p className="font-mono">{declared.rrr}</p>
+            </div>
+            <div>
+              <p className="text-[11.5px] text-muted-foreground">Declared amount</p>
+              <p>{naira(declared.amount)}</p>
+            </div>
+            <div>
+              <p className="text-[11.5px] text-muted-foreground">Receipt</p>
+              {declared.proofUrl ? (
+                <a href={declared.proofUrl} target="_blank" rel="noopener noreferrer" className="font-semibold text-accent underline-offset-4 hover:underline">
+                  View upload
+                </a>
+              ) : (
+                "—"
+              )}
+            </div>
+          </div>
+        ) : (
+          <p className="text-[13px] text-muted-foreground">The applicant hasn&rsquo;t declared a payment yet. You can still verify a bank-branch payment directly.</p>
+        )}
+      </div>
+
+      <div>
+        <SectionLabel>Remita settlement check</SectionLabel>
+        <div className="flex flex-wrap items-end gap-3">
+          <div className="min-w-[220px] flex-1">
+            <TextField id="fn-rrr" label="Remita retrieval reference (RRR)" mono value={d.remitaRrr} placeholder="12 digits" onChange={(v) => set({ remitaRrr: v })} />
+          </div>
+          <ActionButton tone="quiet" icon={checking ? Loader2 : Radar} disabled={checking} onClick={runCheck}>
+            Query Remita
+          </ActionButton>
+        </div>
+        {check ? (
+          <p className={cn("mt-2 rounded-lg px-3.5 py-2.5 text-[12.5px]", !check.configured ? "bg-muted text-muted-foreground" : check.paid ? TONE.clear.soft : TONE.stop.soft)}>
+            {!check.configured
+              ? "Remita API isn't configured on this server — verify against the bank statement manually."
+              : check.paid
+                ? `Match found: ${naira(check.amount)} settled${check.transactionTime ? ` at ${check.transactionTime}` : ""}.`
+                : `No settled payment: ${check.message ?? "not found"}.`}{" "}
+            <span className="opacity-70">Checked {formatDateTime(check.checkedAt)}</span>
+          </p>
+        ) : null}
+      </div>
+
+      <FieldGrid columns={3}>
+        <SelectField
+          id="fn-ch"
+          label="Payment channel"
+          value={d.paymentChannel}
+          onChange={(v) => set({ paymentChannel: v })}
+          options={[
+            { value: "Remita_Portal", label: "Remita portal" },
+            { value: "Bank_Branch", label: "Bank branch" },
+            { value: "FCTA_Direct_Settlement", label: "FCTA direct settlement" },
+          ]}
+        />
+        <NumberField id="fn-amt" label="Amount credited (to date)" prefix="₦" value={d.amountCredited} hint="Cumulative across part payments" onChange={(v) => set({ amountCredited: v })} />
+        <TextField id="fn-ts" label="Bank transaction time" value={d.bankTransactionTimestamp} placeholder="2026-10-06 09:12" onChange={(v) => set({ bankTransactionTimestamp: v })} />
+        <SelectField id="fn-ledger" label="Revenue ledger" value={d.financeLedgerCode} onChange={(v) => set({ financeLedgerCode: v })} options={LEDGER_CODES} />
+        <SelectField id="fn-rec" label="Reconciliation status" value={d.reconciliationStatus} onChange={(v) => set({ reconciliationStatus: v })} options={RECON} />
+        <div>
+          <p className="mb-1.5 text-[12.5px] font-medium text-foreground">Bank-confirmed proof</p>
+          <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-[12.5px] font-semibold hover:bg-muted">
+            {uploading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Paperclip className="h-3.5 w-3.5" />}
+            {d.uploadedRemitaProof ? "Replace" : "Attach"}
+            <input type="file" accept=".pdf,.jpg,.jpeg,.png" className="hidden" onChange={(e) => uploadProof(e.target.files?.[0])} />
+          </label>
+        </div>
+      </FieldGrid>
+
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-muted/50 px-4 py-3 text-[13px]">
+        <span>
+          Variance:{" "}
+          <span className={cn("figure font-semibold", Math.abs(variance) < 1 ? TONE.clear.text : variance < 0 ? TONE.stop.text : TONE.move.text)}>
+            {variance >= 0 ? "+" : "−"}
+            {naira(Math.abs(variance))}
+          </span>
+        </span>
+        <span className="flex items-center gap-2">
+          Suggested: <StatusPill status={suggested} />
+          {suggested !== d.reconciliationStatus ? (
+            <button type="button" className="text-[12px] font-semibold text-accent underline-offset-4 hover:underline" onClick={() => set({ reconciliationStatus: suggested })}>
+              apply
+            </button>
+          ) : null}
+        </span>
+      </div>
+
+      <TextareaField id="fn-notes" label="Finance notes" value={d.financeNotes} rows={2} onChange={(v) => set({ financeNotes: v })} />
+    </div>
+  )
 }
 
-const billingDraft: QueueDraft<BillingDraft> = {
-  field: "billing",
-  views: ["billing", "payment"],
-  title: "Invoice",
-  initial: initialBilling,
+const paymentDraft: QueueDraft<PaymentDraft> = {
+  field: "payment",
+  views: ["verify"],
+  title: "Finance reconciliation",
+  initial: (row) => {
+    const p = (row.payment ?? {}) as Partial<PaymentDraft> & { declared?: Declared }
+    return {
+      remitaRrr: p.remitaRrr ?? p.declared?.rrr ?? "",
+      paymentChannel: p.paymentChannel ?? p.declared?.channel ?? "Remita_Portal",
+      amountCredited: Number(p.amountCredited ?? 0),
+      bankTransactionTimestamp: p.bankTransactionTimestamp ?? "",
+      uploadedRemitaProof: p.uploadedRemitaProof ?? "",
+      financeLedgerCode: p.financeLedgerCode ?? ledgerFor(row.route),
+      reconciliationStatus: p.reconciliationStatus ?? "Unverified",
+      remitaCheck: p.remitaCheck ?? null,
+      financeNotes: p.financeNotes ?? "",
+    }
+  },
   validate: (d) => {
-    if (!d.invoiceNumber.trim()) return "An invoice needs a reference number."
-    if (feesTotal(d) <= 0) return "The invoice total has to be more than zero."
-    if (d.paymentStatus === "Paid" && !d.paymentReference.trim())
-      return "Record the payment reference before confirming."
+    if (digits(d.remitaRrr).length !== 12) return "Enter the 12-digit Remita RRR."
+    if (!(d.amountCredited > 0)) return "Enter the amount credited."
+    if (!d.bankTransactionTimestamp || !parseDate(d.bankTransactionTimestamp)) return "Enter the bank transaction time."
+    if (!d.financeLedgerCode) return "Select the revenue ledger."
     return null
   },
-  render: (d, set) => {
-    const total = feesTotal(d)
-    const settling = d.paymentStatus === "Paid" || Boolean(d.paymentReference)
-
-    return (
-      <div className="space-y-5">
-        <FieldGrid>
-          <TextField
-            id="fin-invoice"
-            label="Invoice number"
-            mono
-            value={d.invoiceNumber}
-            onChange={(v) => set({ invoiceNumber: v })}
-          />
-          <TextField
-            id="fin-due"
-            label="Payment due"
-            type="date"
-            value={d.dueDate}
-            onChange={(dueDate) => set({ dueDate })}
-          />
-        </FieldGrid>
-
-        <FieldGrid>
-          <NumberField
-            id="fin-application"
-            label="Application fee"
-            prefix="₦"
-            value={d.applicationFee}
-            onChange={(applicationFee) =>
-              set({ applicationFee, totalAmount: feesTotal({ ...d, applicationFee }) })
-            }
-          />
-          <NumberField
-            id="fin-processing"
-            label="Processing fee"
-            prefix="₦"
-            value={d.processingFee}
-            onChange={(processingFee) =>
-              set({ processingFee, totalAmount: feesTotal({ ...d, processingFee }) })
-            }
-          />
-          <NumberField
-            id="fin-annual"
-            label="Annual fee"
-            prefix="₦"
-            value={d.annualFee}
-            onChange={(annualFee) => set({ annualFee, totalAmount: feesTotal({ ...d, annualFee }) })}
-          />
-          <NumberField
-            id="fin-penalty"
-            label="Penalty"
-            prefix="₦"
-            hint="Late renewal or unauthorised erection"
-            value={d.penaltyFee}
-            onChange={(penaltyFee) =>
-              set({ penaltyFee, totalAmount: feesTotal({ ...d, penaltyFee }) })
-            }
-          />
-        </FieldGrid>
-
-        <div className="flex items-center justify-between rounded-xl bg-muted/50 px-4 py-3.5">
-          <span className="text-[13px] font-medium text-muted-foreground">Invoice total</span>
-          <span className="figure text-[24px] font-semibold text-foreground">{naira(total)}</span>
-        </div>
-
-        {settling ? (
-          <FieldGrid>
-            <TextField
-              id="fin-reference"
-              label="Payment reference"
-              mono
-              value={d.paymentReference}
-              placeholder="Remita RRR or bank teller number"
-              onChange={(paymentReference) => set({ paymentReference })}
-            />
-            <TextField
-              id="fin-paid"
-              label="Date paid"
-              type="date"
-              value={d.paidOn}
-              onChange={(paidOn) => set({ paidOn })}
-            />
-          </FieldGrid>
-        ) : null}
-
-        <TextareaField
-          id="fin-notes"
-          label="Billing notes"
-          value={d.billingNotes}
-          rows={2}
-          placeholder="Anything the applicant or the Director should know about this invoice."
-          onChange={(billingNotes) => set({ billingNotes })}
-        />
-      </div>
-    )
+  derive: (d, row, { now, actorId }) => {
+    const expected = expectedOf(row)
+    const credited = Number(d.amountCredited || 0)
+    return {
+      payment: {
+        ...d,
+        remitaRrr: digits(d.remitaRrr),
+        expectedAmount: expected,
+        balanceDue: Math.max(0, Math.round((expected - credited) * 100) / 100),
+        creditBalance: Math.max(0, Math.round((credited - expected) * 100) / 100),
+        declared: row.payment?.declared ?? null,
+        reconciledAt: now,
+        reconciledBy: actorId,
+      },
+    }
   },
+  render: (d, set, row) => <FinanceDesk d={d} set={set} row={row} />,
 }
+
+const statusIs = (allowed: string[], message: string) => (draft: Record<string, unknown> | null) =>
+  allowed.includes(String(draft?.reconciliationStatus ?? "")) ? null : message
 
 export function FinanceQueue() {
   return (
-    <WorkQueue<BillingDraft>
-      title="Billing"
-      description="First-party permits only — third-party applications are not billed"
+    <WorkQueue<PaymentDraft>
+      title="Payment reconciliation"
+      description="Verify declared payments against Remita and the bank ledger"
+      department={DEPARTMENT.finance}
       actorId="finance"
-      draft={billingDraft}
+      draft={paymentDraft}
       views={[
         {
-          value: "billing",
-          label: "To invoice",
-          routes: ["first"],
-          statuses: stage("visitReported"),
-          empty: {
-            title: "Nothing to invoice",
-            body: "Business Development sends a file here once the site visit is done and the measurements are in.",
-          },
-          actions: [
-            {
-              key: "issue",
-              label: "Issue invoice",
-              icon: Receipt,
-              status: STATUS.awaitingPayment,
-              department: DEPARTMENT.finance,
-              record: "Invoice issued by Finance",
-              notify: "csu",
-              needsDraft: true,
-            },
-          ],
-        },
-        {
-          value: "payment",
-          label: "Awaiting payment",
-          routes: ["first"],
+          value: "verify",
+          label: "To verify",
+          routes: ["first", "third"],
           statuses: stage("awaitingPayment"),
-          empty: {
-            title: "No invoices outstanding",
-            body: "Issued invoices sit here until you record the payment reference against them.",
-          },
-          column: {
-            header: "Total",
-            render: (row) => <span className="figure">{naira(row.billing?.totalAmount as number)}</span>,
-          },
+          empty: { title: "No payments to verify", body: "Invoices the Director confirms arrive here until payment is reconciled." },
+          column: { header: "Expected", render: (row) => <span className="figure">{naira(expectedOf(row))}</span> },
           actions: [
             {
-              key: "confirm",
-              label: "Confirm payment — back to Business Development",
-              icon: BadgeCheck,
-              status: STATUS.paymentConfirmed,
-              department: DEPARTMENT.businessDevelopment,
-              record: "Payment confirmed by Finance",
-              kind: "success",
+              key: "flag",
+              label: "Flag receipt invalid",
+              tone: "danger",
+              icon: ShieldAlert,
+              status: STATUS.paymentFlagged,
+              department: DEPARTMENT.director,
+              record: "Payment flagged as invalid by Finance",
+              requiresReason: true,
               needsDraft: true,
+              kind: "error",
+            },
+            {
+              key: "partial",
+              label: "Record part payment",
+              tone: "danger",
+              icon: SplitSquareHorizontal,
+              status: STATUS.partPayment,
+              department: DEPARTMENT.finance,
+              record: "Part payment recorded — balance issued",
+              needsDraft: true,
+              notify: "csu",
+              check: statusIs(["Underpaid_Shortfall"], "Set reconciliation status to Underpaid — shortfall first."),
+            },
+            {
+              key: "reconcile",
+              label: "Dispatch receipt — route to Director",
+              icon: BadgeCheck,
+              status: STATUS.paymentReconciled,
+              department: DEPARTMENT.director,
+              record: "Payment reconciled by Finance",
+              needsDraft: true,
+              kind: "success",
+              check: statusIs(["Reconciled_Match", "Overpaid_Credit"], "Only a matched or overpaid payment can be dispatched."),
             },
           ],
         },
         {
-          value: "settled",
-          label: "Settled",
-          routes: ["first"],
-          statuses: [STATUS.paymentConfirmed, ...stage("recommended"), STATUS.approved, STATUS.registered],
-          empty: {
-            title: "Nothing settled yet",
-            body: "Paid applications stay here as the revenue record for the year.",
-          },
-          column: {
-            header: "Total",
-            render: (row) => <span className="figure">{naira(row.billing?.totalAmount as number)}</span>,
-          },
+          value: "done",
+          label: "Reconciled",
+          routes: ["first", "third"],
+          statuses: [...stage("paymentReconciled"), ...stage("issued")],
+          empty: { title: "Nothing reconciled yet", body: "Verified payments stay here as the receipt record." },
+          column: { header: "Credited", render: (row) => <span className="figure">{naira(row.payment?.amountCredited as number)}</span> },
         },
       ]}
     />
   )
 }
 
-/* ------------------------------------------------------------------ *
- * Revenue
- * ------------------------------------------------------------------ */
+/* ================= Ledger ================= */
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
-const SLICE_COLORS = [
-  "hsl(var(--chart-1))",
-  "hsl(var(--chart-2))",
-  "hsl(var(--chart-3))",
-  "hsl(var(--chart-4))",
-  "hsl(var(--chart-5))",
-]
 
-interface Invoice {
-  key: string
-  reference: string
-  applicant: string
-  type: string
-  total: number
-  status: string
-  issued: Date | null
-  paid: Date | null
-}
-
-function useInvoices() {
+export function useLedger() {
   const { rows, loading, error } = useSubmissions()
-
-  const invoices = React.useMemo<Invoice[]>(
-    () =>
-      rows
-        .filter((row) => row.route === "first" && row.billing && Object.keys(row.billing).length)
-        .map((row) => {
-          const billing = row.billing as Record<string, unknown>
-          return {
-            key: `${row.route}-${row.id}`,
-            reference: String(billing.invoiceNumber ?? row.submissionId ?? row.id.slice(0, 8)),
-            applicant: row.companyName || row.applicantName || "Unnamed applicant",
-            type: row.applicationType || "Signage permit",
-            total: Number(billing.totalAmount ?? 0),
-            status: String(billing.paymentStatus ?? "Pending"),
-            issued: toDate(billing.generatedDate ?? billing.submittedAt ?? row.updatedAt),
-            paid: toDate(billing.paidOn),
-          }
-        }),
-    [rows],
-  )
-
-  return { invoices, loading, error }
+  return React.useMemo(() => {
+    const credited = (r: SubmissionRow) => Number(r.payment?.amountCredited ?? 0)
+    const reconciled = rows.filter((r) => ["Reconciled_Match", "Overpaid_Credit"].includes(String(r.payment?.reconciliationStatus ?? "")))
+    const outstanding = rows.filter((r) => stage("awaitingPayment").includes(r.status ?? ""))
+    const collected = reconciled.reduce((s, r) => s + credited(r), 0)
+    const owed = outstanding.reduce((s, r) => s + Math.max(0, expectedOf(r) - credited(r)), 0)
+    return { rows, reconciled, outstanding, collected, owed, credited, loading, error }
+  }, [rows, loading, error])
 }
 
-export function RevenuePanel() {
-  const { invoices, loading, error } = useInvoices()
-  const [search, setSearch] = React.useState("")
-  const [view, setView] = React.useState<"trend" | "invoices">("trend")
+export function LedgerPanel() {
+  const { reconciled, outstanding, collected, owed, credited, loading, error } = useLedger()
+  const year = new Date().getFullYear()
 
-  const years = React.useMemo(() => {
-    const set = new Set<number>()
-    invoices.forEach((invoice) => {
-      const when = invoice.paid ?? invoice.issued
-      if (when) set.add(when.getFullYear())
-    })
-    if (!set.size) set.add(new Date().getFullYear())
-    return [...set].sort((a, b) => b - a)
-  }, [invoices])
+  const byCode = LEDGER_CODES.map((c) => ({
+    ...c,
+    total: reconciled.filter((r) => r.payment?.financeLedgerCode === c.value).reduce((s, r) => s + credited(r), 0),
+  }))
 
-  const [year, setYear] = React.useState<number>(years[0])
-  React.useEffect(() => {
-    if (!years.includes(year)) setYear(years[0])
-  }, [years, year])
+  const monthly = MONTHS.map((m, i) => ({
+    m,
+    total: reconciled
+      .filter((r) => {
+        const d = parseDate(r.payment?.bankTransactionTimestamp)
+        return d !== null && d.getFullYear() === year && d.getMonth() === i
+      })
+      .reduce((s, r) => s + credited(r), 0),
+  }))
+  const peak = Math.max(1, ...monthly.map((x) => x.total))
 
-  const settled = invoices.filter((invoice) => invoice.status === "Paid")
-  const outstanding = invoices.filter((invoice) => invoice.status !== "Paid")
-
-  const collected = settled.reduce((sum, invoice) => sum + invoice.total, 0)
-  const owed = outstanding.reduce((sum, invoice) => sum + invoice.total, 0)
-
-  const monthly = React.useMemo(() => {
-    const totals = new Array(12).fill(0)
-    settled.forEach((invoice) => {
-      const when = invoice.paid ?? invoice.issued
-      if (when && when.getFullYear() === year) totals[when.getMonth()] += invoice.total
-    })
-    return MONTHS.map((month, index) => ({ month, revenue: totals[index] }))
-  }, [settled, year])
-
-  const byType = React.useMemo(() => {
-    const totals = new Map<string, number>()
-    settled.forEach((invoice) => {
-      totals.set(invoice.type, (totals.get(invoice.type) ?? 0) + invoice.total)
-    })
-    return [...totals.entries()]
-      .map(([name, value]) => ({ name, value }))
-      .sort((a, b) => b.value - a.value)
-      .slice(0, 5)
-  }, [settled])
-
-  const listed = React.useMemo(() => {
-    const term = search.trim().toLowerCase()
-    return invoices
-      .filter((invoice) =>
-        term
-          ? [invoice.reference, invoice.applicant, invoice.type]
-              .join(" ")
-              .toLowerCase()
-              .includes(term)
-          : true,
-      )
-      .sort((a, b) => (b.issued?.getTime() ?? 0) - (a.issued?.getTime() ?? 0))
-  }, [invoices, search])
-
-  if (error) {
-    return (
-      <Panel title="Revenue">
-        <LoadFailed error={error} what="Revenue" />
-      </Panel>
-    )
-  }
+  if (error) return <LoadFailed error={error} what="The ledger" />
 
   return (
     <div className="space-y-4">
-      <div className="grid gap-3 sm:grid-cols-3">
-        <StatTile
-          index={0}
-          label="Collected to date"
-          value={collected}
-          tone="clear"
-          icon={Wallet}
-          note={`${settled.length} invoice${settled.length === 1 ? "" : "s"} settled`}
-        />
-        <StatTile
-          index={1}
-          label="Outstanding"
-          value={owed}
-          tone="wait"
-          icon={Receipt}
-          note={`${outstanding.length} awaiting payment`}
-        />
-        <StatTile
-          index={2}
-          label="Invoices raised"
-          value={invoices.length}
-          tone="idle"
-          icon={BadgeCheck}
-          note="Across both application routes"
-        />
-      </div>
-
-      <Panel
-        title={view === "trend" ? "Revenue" : "Invoices"}
-        description={
-          view === "trend"
-            ? "Payments recorded against issued invoices"
-            : "Every invoice raised, newest first"
-        }
-        actions={
-          <>
-            <Segmented
-              value={view}
-              onChange={(v) => setView(v as typeof view)}
-              options={[
-                { value: "trend", label: "Revenue" },
-                { value: "invoices", label: "Invoices" },
-              ]}
-            />
-            {view === "trend" && years.length > 1 ? (
-              <Segmented
-                value={String(year)}
-                onChange={(v) => setYear(Number(v))}
-                options={years.map((y) => ({ value: String(y), label: String(y) }))}
-              />
-            ) : null}
-          </>
-        }
-        bodyClassName="p-3 sm:p-5"
-      >
+      <Panel title="Revenue ledger" description={`${naira(collected)} reconciled · ${naira(owed)} outstanding across ${outstanding.length} invoice(s)`}>
         {loading ? (
-          <RowsSkeleton rows={5} columns={4} />
-        ) : !invoices.length ? (
-          <EmptyState
-            icon={Receipt}
-            title="No invoices raised yet"
-            description="Revenue is calculated from invoices issued in Billing — raise one and the figures appear here."
-          />
-        ) : view === "trend" ? (
-          <div className="grid gap-6 lg:grid-cols-5">
-            <div className="lg:col-span-3">
-              <p className="mb-3 text-[12.5px] font-medium text-muted-foreground">
-                Collected by month, {year}
-              </p>
-              <div className="h-[280px] w-full">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={monthly} margin={{ top: 8, right: 8, left: 8, bottom: 0 }}>
-                    <CartesianGrid strokeDasharray="2 4" vertical={false} stroke="hsl(var(--border))" />
-                    <XAxis
-                      dataKey="month"
-                      tickLine={false}
-                      axisLine={false}
-                      tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }}
-                    />
-                    <YAxis
-                      tickLine={false}
-                      axisLine={false}
-                      width={52}
-                      tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }}
-                      tickFormatter={(value: number) =>
-                        value >= 1_000_000 ? `₦${(value / 1_000_000).toFixed(1)}M` : `₦${value / 1000}k`
-                      }
-                    />
-                    <Tooltip
-                      cursor={{ fill: "hsl(var(--muted))" }}
-                      contentStyle={{
-                        borderRadius: 10,
-                        border: "1px solid hsl(var(--border))",
-                        background: "hsl(var(--card))",
-                        fontSize: 12,
-                      }}
-                      formatter={(value: number) => [naira(value), "Collected"]}
-                    />
-                    <Bar dataKey="revenue" radius={[5, 5, 0, 0]} fill="hsl(var(--chart-2))" />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-            </div>
-
-            <div className="lg:col-span-2">
-              <p className="mb-3 text-[12.5px] font-medium text-muted-foreground">
-                Where the money comes from
-              </p>
-              {byType.length ? (
-                <>
-                  <div className="h-[200px] w-full">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <PieChart>
-                        <Pie
-                          data={byType}
-                          dataKey="value"
-                          nameKey="name"
-                          innerRadius={52}
-                          outerRadius={86}
-                          paddingAngle={2}
-                          stroke="hsl(var(--card))"
-                          strokeWidth={2}
-                        >
-                          {byType.map((entry, index) => (
-                            <Cell key={entry.name} fill={SLICE_COLORS[index % SLICE_COLORS.length]} />
-                          ))}
-                        </Pie>
-                        <Tooltip
-                          contentStyle={{
-                            borderRadius: 10,
-                            border: "1px solid hsl(var(--border))",
-                            background: "hsl(var(--card))",
-                            fontSize: 12,
-                          }}
-                          formatter={(value: number) => naira(value)}
-                        />
-                      </PieChart>
-                    </ResponsiveContainer>
-                  </div>
-                  <ul className="mt-3 space-y-1.5">
-                    {byType.map((entry, index) => (
-                      <li key={entry.name} className="flex items-center gap-2 text-[12.5px]">
-                        <span
-                          className="h-2.5 w-2.5 shrink-0 rounded-sm"
-                          style={{ background: SLICE_COLORS[index % SLICE_COLORS.length] }}
-                        />
-                        <span className="min-w-0 flex-1 truncate text-muted-foreground">
-                          {entry.name}
-                        </span>
-                        <span className="figure text-foreground">{naira(entry.value)}</span>
-                      </li>
-                    ))}
-                  </ul>
-                </>
-              ) : (
-                <p className="text-[13px] text-muted-foreground">
-                  Nothing settled yet, so there's no split to show.
-                </p>
-              )}
-            </div>
-          </div>
+          <RowsSkeleton rows={3} columns={2} />
         ) : (
-          <div className="space-y-3">
-            <SearchField
-              value={search}
-              onChange={setSearch}
-              placeholder="Search invoice, applicant or type"
-            />
-            <div className="overflow-x-auto scroll-slim">
-              <table className="w-full border-collapse text-left">
-                <thead>
-                  <tr className="border-b border-border text-[11.5px] font-semibold text-muted-foreground">
-                    <th className="px-3 py-2.5">Invoice</th>
-                    <th className="px-3 py-2.5">Applicant</th>
-                    <th className="hidden px-3 py-2.5 md:table-cell">Type</th>
-                    <th className="px-3 py-2.5 text-right">Amount</th>
-                    <th className="px-3 py-2.5">Payment</th>
-                    <th className="hidden px-3 py-2.5 sm:table-cell">Issued</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {listed.map((invoice, i) => (
-                    <tr
-                      key={invoice.key}
-                      style={{ ["--i" as string]: Math.min(i, 10) }}
-                      className="reveal border-b border-border/70 last:border-0 hover:bg-muted/50"
-                    >
-                      <td className="px-3 py-3 font-mono text-[12px] text-muted-foreground">
-                        {invoice.reference}
-                      </td>
-                      <td className="px-3 py-3 text-[13.5px] font-medium text-foreground">
-                        {invoice.applicant}
-                      </td>
-                      <td className="hidden px-3 py-3 text-[13px] text-muted-foreground md:table-cell">
-                        {invoice.type}
-                      </td>
-                      <td className="figure px-3 py-3 text-right text-[13.5px] text-foreground">
-                        {naira(invoice.total)}
-                      </td>
-                      <td className="px-3 py-3">
-                        <StatusPill status={invoice.status} />
-                      </td>
-                      <td className="hidden px-3 py-3 text-[12.5px] text-muted-foreground sm:table-cell">
-                        {invoice.issued ? formatDate(invoice.issued) : "—"}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+          <div className="grid gap-3 sm:grid-cols-3">
+            {byCode.map((c) => (
+              <div key={c.value} className="rounded-lg border border-border p-3.5">
+                <p className="text-[12px] text-muted-foreground">{c.label}</p>
+                <p className="figure mt-1 text-[20px] font-semibold text-foreground">{naira(c.total)}</p>
+              </div>
+            ))}
           </div>
+        )}
+      </Panel>
+
+      <Panel title={`Collections by month, ${year}`}>
+        <div className="flex h-44 items-end gap-2">
+          {monthly.map((x) => (
+            <div key={x.m} className="flex h-full flex-1 flex-col items-center justify-end gap-1" title={naira(x.total)}>
+              <div className="w-full rounded-t bg-[hsl(var(--chart-2))]" style={{ height: `${(x.total / peak) * 100}%`, minHeight: x.total ? 4 : 0 }} />
+              <span className="text-[10.5px] text-muted-foreground">{x.m}</span>
+            </div>
+          ))}
+        </div>
+      </Panel>
+
+      <Panel title="Recent reconciliations" bodyClassName="p-3 sm:p-4">
+        {!reconciled.length ? (
+          <EmptyState icon={BadgeCheck} title="Nothing reconciled yet" description="Verified payments appear here." />
+        ) : (
+          <table className="w-full text-left text-[12.5px]">
+            <thead>
+              <tr className="border-b border-border text-muted-foreground">
+                <th className="px-2 py-2">RRR</th>
+                <th className="px-2 py-2">Payer</th>
+                <th className="px-2 py-2">Ledger</th>
+                <th className="px-2 py-2 text-right">Credited</th>
+                <th className="px-2 py-2">Date</th>
+              </tr>
+            </thead>
+            <tbody>
+              {reconciled.slice(0, 20).map((r) => (
+                <tr key={`${r.route}-${r.id}`} className="border-b border-border/60">
+                  <td className="px-2 py-2 font-mono">{String(r.payment?.remitaRrr ?? "")}</td>
+                  <td className="px-2 py-2">{r.companyName ?? r.applicantName}</td>
+                  <td className="px-2 py-2">{String(r.payment?.financeLedgerCode ?? "")}</td>
+                  <td className="figure px-2 py-2 text-right">{naira(credited(r))}</td>
+                  <td className="px-2 py-2">{formatDate(r.payment?.bankTransactionTimestamp)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         )}
       </Panel>
     </div>

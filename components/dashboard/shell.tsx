@@ -3,25 +3,24 @@
 import * as React from "react"
 import { useRouter } from "next/navigation"
 import { signOut } from "firebase/auth"
-import { limit, orderBy, query, where } from "firebase/firestore"
+import { limit, where } from "firebase/firestore"
 import type { LucideIcon } from "lucide-react"
-import { Bell, ChevronsLeft, LogOut, Menu, PanelsTopLeft, Settings, User, X } from "lucide-react"
+import { Bell, ChevronsLeft, LayoutGrid, LogOut, Menu, PanelsTopLeft, Settings, User, X } from "lucide-react"
 import { auth, COL } from "@/lib/firebase"
 import { useCurrentUser, useRealtimeCollection } from "@/hooks/use-firestore"
 import { formatLongDate, initials } from "@/lib/format"
 import { toast } from "@/components/ui/toast"
+import { FileTracker } from "@/components/dashboard/audit-timeline"
 import { cn } from "@/lib/utils"
 
 export interface ShellNavItem {
   value: string
   label: string
   icon: LucideIcon
-  /** Live count shown beside the label. Hidden when 0. */
   badge?: number
 }
 
 interface ShellProps {
-  /** Matches the `userId` written onto notification documents. */
   audience: string
   unitName: string
   unitCaption: string
@@ -31,28 +30,13 @@ interface ShellProps {
   children: React.ReactNode
 }
 
-export function DashboardShell({
-  audience,
-  unitName,
-  unitCaption,
-  nav,
-  active,
-  onNavigate,
-  children,
-}: ShellProps) {
+export function DashboardShell({ audience, unitName, unitCaption, nav, active, onNavigate, children }: ShellProps) {
   const router = useRouter()
   const { user } = useCurrentUser()
   const [collapsed, setCollapsed] = React.useState(false)
   const [mobileOpen, setMobileOpen] = React.useState(false)
 
-  // Unread count is read client-side from the last 100 notifications so the
-  // query needs no composite index, and it tolerates both the `isRead` and
-  // `read` field names already in the database.
-  const { data: notifications } = useRealtimeCollection<Record<string, unknown>>(
-    COL.notifications,
-    [where("userId", "==", audience), limit(100)],
-    [audience],
-  )
+  const { data: notifications } = useRealtimeCollection<Record<string, unknown>>(COL.notifications, [where("userId", "==", audience), limit(100)], [audience])
   const unread = notifications.filter((n) => !(n.isRead ?? n.read ?? false)).length
 
   const displayName = user?.displayName || user?.email?.split("@")[0] || unitName
@@ -60,13 +44,10 @@ export function DashboardShell({
 
   const handleSignOut = async () => {
     try {
-      await signOut(auth)
-      router.push("/login")
+      if (auth.currentUser) await signOut(auth)
+      router.push("/desks")
     } catch (error) {
-      toast.error({
-        title: "Sign out failed",
-        description: error instanceof Error ? error.message : "Try again in a moment.",
-      })
+      toast.error({ title: "Sign out failed", description: error instanceof Error ? error.message : "Try again in a moment." })
     }
   }
 
@@ -79,9 +60,7 @@ export function DashboardShell({
         {!collapsed ? (
           <div className="min-w-0 leading-tight">
             <p className="font-display text-[14px] font-semibold text-white">DOAS</p>
-            <p className="truncate text-[11px] text-[hsl(var(--sidebar-foreground))]/70">
-              {unitCaption}
-            </p>
+            <p className="truncate text-[11px] text-[hsl(var(--sidebar-foreground))]/70">{unitCaption}</p>
           </div>
         ) : null}
       </div>
@@ -113,9 +92,7 @@ export function DashboardShell({
                   {item.badge > 99 ? "99+" : item.badge}
                 </span>
               ) : null}
-              {collapsed && item.badge ? (
-                <span className="h-1.5 w-1.5 rounded-full bg-[hsl(var(--sidebar-primary))]" />
-              ) : null}
+              {collapsed && item.badge ? <span className="h-1.5 w-1.5 rounded-full bg-[hsl(var(--sidebar-primary))]" /> : null}
             </button>
           )
         })}
@@ -124,13 +101,18 @@ export function DashboardShell({
       <div className="border-t border-[hsl(var(--sidebar-border))] p-2.5">
         <button
           type="button"
+          onClick={() => router.push("/desks")}
+          className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-[12.5px] text-[hsl(var(--sidebar-foreground))]/80 transition-colors hover:bg-[hsl(var(--sidebar-accent))] hover:text-white"
+        >
+          <LayoutGrid className="h-4 w-4" aria-hidden />
+          {!collapsed ? "All desks" : null}
+        </button>
+        <button
+          type="button"
           onClick={() => setCollapsed((v) => !v)}
           className="hidden w-full items-center gap-3 rounded-lg px-3 py-2 text-[12.5px] text-[hsl(var(--sidebar-foreground))]/80 transition-colors hover:bg-[hsl(var(--sidebar-accent))] hover:text-white lg:flex"
         >
-          <ChevronsLeft
-            className={cn("h-4 w-4 transition-transform", collapsed && "rotate-180")}
-            aria-hidden
-          />
+          <ChevronsLeft className={cn("h-4 w-4 transition-transform", collapsed && "rotate-180")} aria-hidden />
           {!collapsed ? "Collapse" : null}
         </button>
       </div>
@@ -139,25 +121,13 @@ export function DashboardShell({
 
   return (
     <div className="flex min-h-screen bg-background">
-      {/* Desktop rail */}
-      <aside
-        className={cn(
-          "sticky top-0 hidden h-screen shrink-0 transition-[width] duration-200 lg:block",
-          collapsed ? "w-[68px]" : "w-[232px]",
-        )}
-      >
+      <aside className={cn("sticky top-0 hidden h-screen shrink-0 transition-[width] duration-200 lg:block", collapsed ? "w-[68px]" : "w-[232px]")}>
         <Rail />
       </aside>
 
-      {/* Mobile rail */}
       {mobileOpen ? (
         <div className="fixed inset-0 z-50 lg:hidden">
-          <button
-            type="button"
-            aria-label="Close menu"
-            onClick={() => setMobileOpen(false)}
-            className="fade-in absolute inset-0 bg-foreground/40 backdrop-blur-[2px]"
-          />
+          <button type="button" aria-label="Close menu" onClick={() => setMobileOpen(false)} className="fade-in absolute inset-0 bg-foreground/40 backdrop-blur-[2px]" />
           <div className="reveal absolute inset-y-0 left-0 w-[248px]">
             <Rail onPick={() => setMobileOpen(false)} />
             <button
@@ -185,9 +155,7 @@ export function DashboardShell({
             </button>
 
             <div className="min-w-0 flex-1">
-              <p className="truncate font-display text-[15px] font-semibold text-foreground">
-                {activeItem?.label ?? unitName}
-              </p>
+              <p className="truncate font-display text-[15px] font-semibold text-foreground">{activeItem?.label ?? unitName}</p>
               <p className="truncate text-[11.5px] text-muted-foreground">{formatLongDate()}</p>
             </div>
 
@@ -205,17 +173,16 @@ export function DashboardShell({
               ) : null}
             </button>
 
-            <AccountMenu
-              name={displayName}
-              email={user?.email ?? undefined}
-              unit={unitName}
-              onProfile={() => onNavigate("settings")}
-              onSignOut={handleSignOut}
-            />
+            <AccountMenu name={displayName} email={user?.email ?? undefined} unit={unitName} onProfile={() => onNavigate("settings")} onSignOut={handleSignOut} />
           </div>
         </header>
 
-        <main className="flex-1 px-4 py-5 sm:px-6 sm:py-7">{children}</main>
+        <main className="flex-1 px-4 py-5 sm:px-6 sm:py-7">
+          {children}
+          <div className="mt-8">
+            <FileTracker />
+          </div>
+        </main>
       </div>
     </div>
   )
@@ -260,47 +227,54 @@ function AccountMenu({
         aria-expanded={open}
         className="flex items-center gap-2 rounded-lg p-1 transition-colors hover:bg-muted"
       >
-        <span className="grid h-8 w-8 place-items-center rounded-full bg-primary font-display text-[12px] font-semibold text-primary-foreground">
-          {initials(name)}
-        </span>
+        <span className="grid h-8 w-8 place-items-center rounded-full bg-primary font-display text-[12px] font-semibold text-primary-foreground">{initials(name)}</span>
         <span className="hidden min-w-0 text-left sm:block">
-          <span className="block max-w-[140px] truncate text-[13px] font-medium text-foreground">
-            {name}
-          </span>
+          <span className="block max-w-[140px] truncate text-[13px] font-medium text-foreground">{name}</span>
           <span className="block text-[11px] text-muted-foreground">{unit}</span>
         </span>
       </button>
 
       {open ? (
-        <div
-          role="menu"
-          className="reveal absolute right-0 top-[calc(100%+8px)] w-60 overflow-hidden rounded-xl surface-raised"
-        >
+        <div role="menu" className="reveal absolute right-0 top-[calc(100%+8px)] w-60 overflow-hidden rounded-xl surface-raised">
           <div className="border-b border-border px-3.5 py-3">
             <p className="truncate text-[13px] font-semibold text-foreground">{name}</p>
             <p className="truncate text-[11.5px] text-muted-foreground">{email ?? unit}</p>
           </div>
           <div className="p-1.5">
-            <MenuItem icon={User} label="Profile" onClick={() => { setOpen(false); onProfile() }} />
-            <MenuItem icon={Settings} label="Settings" onClick={() => { setOpen(false); onProfile() }} />
+            <MenuItem
+              icon={User}
+              label="Profile"
+              onClick={() => {
+                setOpen(false)
+                onProfile()
+              }}
+            />
+            <MenuItem
+              icon={Settings}
+              label="Settings"
+              onClick={() => {
+                setOpen(false)
+                onProfile()
+              }}
+            />
             <MenuItem
               icon={PanelsTopLeft}
               label="Keyboard shortcuts"
               onClick={() => {
                 setOpen(false)
-                toast.info({
-                  title: "Shortcuts",
-                  description: "Press / to search a table, Esc to close any dialog.",
-                })
+                toast.info({ title: "Shortcuts", description: "Press / to search a table, Esc to close any dialog." })
               }}
             />
           </div>
           <div className="border-t border-border p-1.5">
             <MenuItem
               icon={LogOut}
-              label="Sign out"
+              label="Leave desk"
               destructive
-              onClick={() => { setOpen(false); onSignOut() }}
+              onClick={() => {
+                setOpen(false)
+                onSignOut()
+              }}
             />
           </div>
         </div>
@@ -309,17 +283,7 @@ function AccountMenu({
   )
 }
 
-function MenuItem({
-  icon: Icon,
-  label,
-  onClick,
-  destructive,
-}: {
-  icon: LucideIcon
-  label: string
-  onClick: () => void
-  destructive?: boolean
-}) {
+function MenuItem({ icon: Icon, label, onClick, destructive }: { icon: LucideIcon; label: string; onClick: () => void; destructive?: boolean }) {
   return (
     <button
       type="button"
@@ -327,9 +291,7 @@ function MenuItem({
       onClick={onClick}
       className={cn(
         "flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-[13px] font-medium transition-colors",
-        destructive
-          ? "text-[hsl(var(--state-stop))] hover:bg-[hsl(var(--state-stop-soft))]"
-          : "text-foreground hover:bg-muted",
+        destructive ? "text-[hsl(var(--state-stop))] hover:bg-[hsl(var(--state-stop-soft))]" : "text-foreground hover:bg-muted",
       )}
     >
       <Icon className="h-4 w-4" aria-hidden />

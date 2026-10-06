@@ -2,48 +2,19 @@
 
 import * as React from "react"
 import { addDoc, collection, doc, limit, orderBy, updateDoc } from "firebase/firestore"
-import {
-  CalendarCheck,
-  CalendarDays,
-  CalendarX,
-
-  Clock3,
-  Forward,
-
-  RotateCcw,
-  Stamp,
-  XCircle,
-} from "lucide-react"
+import { BadgeCheck, CalendarCheck, CalendarDays, CalendarX, Clock3, Forward, Receipt, RotateCcw, Stamp, Undo2, XCircle } from "lucide-react"
 import { COL, db } from "@/lib/firebase"
-import { DEPARTMENT, STATUS, stage } from "@/lib/workflow"
+import { DEPARTMENT, DIRECTOR_DESK, IN_FLIGHT, STATUS, stage } from "@/lib/workflow"
 import { useRealtimeCollection } from "@/hooks/use-firestore"
-import { formatDate, formatDateTime, truncate } from "@/lib/format"
+import { formatDate, formatDateTime, naira, truncate } from "@/lib/format"
 import { toast } from "@/components/ui/toast"
 import { Sheet } from "@/components/dashboard/sheet"
 import { ActionButton, TextareaField } from "@/components/dashboard/form-kit"
-import {
-  EmptyState,
-  Field,
-  LoadFailed,
-  Panel,
-  RowsSkeleton,
-  SectionLabel,
-  StatusPill,
-  UrgencyPill,
-} from "@/components/dashboard/kit"
-import {
-  WorkQueue,
-  type QueueAction,
-  type SubmissionRow,
-} from "@/components/dashboard/work-queue"
+import { EmptyState, Field, LoadFailed, Panel, RowsSkeleton, SectionLabel, StatusPill, UrgencyPill } from "@/components/dashboard/kit"
+import { WorkQueue, type QueueAction, type SubmissionRow } from "@/components/dashboard/work-queue"
 
 /* ------------------------------------------------------------------ *
- * Applications
- *
- * The Director sits at four points in the two chains. What "accept" means
- * depends on which point the file is at, so the actions are built per row
- * rather than per view. Decline and return are always available, and both
- * demand a written reason.
+ * The gatekeeper desk. Every inter-department move is decided here.
  * ------------------------------------------------------------------ */
 
 const decline: QueueAction = {
@@ -65,162 +36,131 @@ const returnForChanges: QueueAction = {
   icon: RotateCcw,
   status: STATUS.changesRequested,
   department: DEPARTMENT.csu,
-  record: "Returned for changes by the Director",
+  record: "Returned to applicant for changes by the Director",
   kind: "error",
   requiresReason: true,
 }
 
+function fieldDesk(row: SubmissionRow) {
+  return row.route === "first"
+    ? { status: STATUS.siteVisit, department: DEPARTMENT.businessDevelopment, name: "Business Development", verb: "site visit" }
+    : { status: STATUS.planningReview, department: DEPARTMENT.planning, name: "Planning", verb: "technical vetting" }
+}
+
 function directorActions(row: SubmissionRow): QueueAction[] {
-  const status = row.status ?? ""
-  const base = [decline, returnForChanges]
+  const s = row.status ?? ""
+  const field = fieldDesk(row)
 
-  // Stage 2 — first look, straight after CSU.
-  if (stage("withDirector").includes(status)) {
-    return row.route === "first"
-      ? [
-          ...base,
-          {
-            key: "to-bd",
-            label: "Accept — send for site visit",
-            icon: Forward,
-            status: STATUS.siteVisit,
-            department: DEPARTMENT.businessDevelopment,
-            record: "Accepted by the Director, sent for site visit",
-          },
-        ]
-      : [
-          ...base,
-          {
-            key: "to-monitoring",
-            label: "Accept — send for inspection",
-            icon: Forward,
-            status: STATUS.inspection,
-            department: DEPARTMENT.monitoring,
-            record: "Accepted by the Director, sent for inspection",
-          },
-        ]
+  const toField = (reason: boolean): QueueAction => ({
+    key: reason ? "back-to-field" : "to-field",
+    label: reason ? `Send back to ${field.name}` : `Accept — send for ${field.verb}`,
+    tone: reason ? "danger" : "primary",
+    icon: reason ? Undo2 : Forward,
+    status: field.status,
+    department: field.department,
+    record: reason ? `Returned to ${field.name} for re-inspection by the Director` : `Digital signature appended — routed to ${field.name}`,
+    requiresReason: reason,
+  })
+
+  const toBilling = (label: string, record: string, reason = false): QueueAction => ({
+    key: reason ? "billing-reason" : "to-billing",
+    label,
+    tone: reason ? "danger" : "primary",
+    icon: Receipt,
+    status: STATUS.billingAssessment,
+    department: DEPARTMENT.billing,
+    record,
+    requiresReason: reason,
+  })
+
+  if (stage("withDirector").includes(s)) return [decline, returnForChanges, toField(false)]
+
+  if ((row.route === "first" && stage("visitReported").includes(s)) || (row.route === "third" && stage("planningReported").includes(s))) {
+    const clash = String(row.technicalReport?.clashDetectionStatus ?? "")
+    const actions: QueueAction[] = clash === "Rejected_Overlap" ? [decline, toField(true)] : [toField(true)]
+    if (row.measurements?.items?.length) actions.push(toBilling("Verify measurements — send to Billing", "Measurements verified by the Director — routed to Billing"))
+    return actions
   }
 
-  // Third party, stage 4 — Monitoring's report is back.
-  if (stage("inspectionReported").includes(status) && row.route === "third") {
+  if (stage("billingQueried").includes(s)) return [toField(true), toBilling("Overrule query — return to Billing", "Billing query overruled by the Director", true)]
+
+  if (stage("billProposed").includes(s))
     return [
-      ...base,
+      toBilling("Return for repricing", "Pricing returned to Billing by the Director", true),
       {
-        key: "to-planning",
-        label: "Accept — send to Planning",
-        icon: Forward,
-        status: STATUS.planningReview,
-        department: DEPARTMENT.planning,
-        record: "Inspection accepted, sent to Planning",
+        key: "confirm-price",
+        label: `Confirm ${naira(row.billing?.netInvoiceAmount as number)} — issue invoice`,
+        icon: BadgeCheck,
+        status: STATUS.awaitingPayment,
+        department: DEPARTMENT.finance,
+        record: s === STATUS.renewalProposed ? "Renewal pricing confirmed by the Director — invoice issued" : "Pricing confirmed by the Director — invoice issued",
       },
     ]
-  }
 
-  // Third party, stage 6 — Planning's report is back. Approval hands the file
-  // to CSU, who register the applicant as a third party.
-  if (status === STATUS.planningReported && row.route === "third") {
+  if (stage("paymentFlagged").includes(s))
     return [
-      ...base,
+      decline,
       {
-        key: "approve-third",
-        label: "Approve permit",
-        icon: Stamp,
-        status: STATUS.approved,
-        department: DEPARTMENT.csu,
-        record: "Permit approved by the Director",
-        kind: "success",
-        notify: "csu",
+        key: "reverify",
+        label: "Return to Finance to re-verify",
+        tone: "danger",
+        icon: Undo2,
+        status: STATUS.awaitingPayment,
+        department: DEPARTMENT.finance,
+        record: "Flagged payment returned to Finance by the Director",
+        requiresReason: true,
       },
     ]
-  }
 
-  // First party, stage 6 — Business Development recommends. The Director's
-  // acceptance writes the holder straight into the first-party register.
-  if (stage("recommended").includes(status) && row.route === "first") {
+  if (stage("paymentReconciled").includes(s))
     return [
-      ...base,
       {
-        key: "approve-first",
-        label: "Approve and register",
+        key: "sign",
+        label: row.registerId ? "Sign renewal — extend permit" : "Sign off — issue permit",
         icon: Stamp,
         status: STATUS.registered,
         department: DEPARTMENT.csu,
-        record: "Permit approved and entered in the first-party register",
+        record: row.registerId ? "Permit renewed and signed by the Director" : "Permit signed and issued by the Director",
         kind: "success",
         notify: "csu",
-        register: "first-party",
+        register: row.route === "first" ? "first-party" : "third-party",
       },
     ]
-  }
 
   return []
 }
 
-const DECISION_STATUSES = [
-  ...stage("withDirector"),
-  ...stage("inspectionReported"),
-  ...stage("recommended"),
-  STATUS.planningReported,
-]
-
-const IN_FLIGHT = [
-  ...stage("siteVisit"),
-  ...stage("visitReported"),
-  ...stage("awaitingPayment"),
-  STATUS.paymentConfirmed,
-  ...stage("inspection"),
-  STATUS.planningReview,
-]
-
 export function DirectorSubmissions() {
   return (
     <WorkQueue
-      title="Applications"
-      description="Every point in both chains where the decision is yours"
+      title="Director's desk"
+      description="Every file waiting for your signature before it can move"
       actorId="director"
       views={[
         {
           value: "decisions",
           label: "Your decision",
           routes: ["first", "third"],
-          statuses: DECISION_STATUSES,
-          empty: {
-            title: "Nothing waiting on you",
-            body: "Files arrive here from CSU, from Business Development, and from Monitoring and Planning once their reports are in.",
-          },
+          statuses: DIRECTOR_DESK,
+          empty: { title: "Nothing waiting on you", body: "Files arrive here between every desk — intake, field reports, bills and payments." },
           actionsFor: directorActions,
-          column: { header: "Route", render: (row) => (row.route === "first" ? "First party" : "Third party") },
+          column: { header: "Stage", render: (row) => row.status ?? "—" },
         },
         {
           value: "moving",
           label: "With other desks",
           routes: ["first", "third"],
           statuses: IN_FLIGHT,
-          empty: {
-            title: "Nothing out with other desks",
-            body: "Files you've routed to Business Development, Finance, Monitoring or Planning show up here until they come back.",
-          },
+          empty: { title: "Nothing out with other desks", body: "Files you've routed onward show here until they come back." },
           column: { header: "With", render: (row) => row.department ?? "—" },
         },
         {
           value: "closed",
           label: "Closed",
           routes: ["first", "third"],
-          statuses: [
-            STATUS.approved,
-            STATUS.registered,
-            STATUS.declined,
-            STATUS.changesRequested,
-            "Rejected",
-          ],
-          empty: {
-            title: "Nothing closed yet",
-            body: "Approved, declined and returned files stay here as the permanent record.",
-          },
-          column: {
-            header: "Permit",
-            render: (row) => (row.permitNumber ? <span className="font-mono text-[11.5px]">{row.permitNumber}</span> : "—"),
-          },
+          statuses: [...stage("issued"), ...stage("blocked")],
+          empty: { title: "Nothing closed yet", body: "Issued, declined and returned files stay here." },
+          column: { header: "Permit", render: (row) => (row.permitNumber ? <span className="font-mono text-[11.5px]">{row.permitNumber}</span> : "—") },
         },
       ]}
     />
@@ -252,57 +192,32 @@ export function DirectorMeetings() {
   const [reply, setReply] = React.useState("")
   const [busy, setBusy] = React.useState(false)
 
-  const { data, loading, error } = useRealtimeCollection<MeetingDoc>(
-    COL.meetings,
-    [orderBy("createdAt", "desc"), limit(150)],
-    [],
-  )
-
-  const rows = React.useMemo(
-    () => data.filter((m) => ["forwarded", "approved", "rejected", "scheduled"].includes(m.status ?? "")),
-    [data],
-  )
+  const { data, loading, error } = useRealtimeCollection<MeetingDoc>(COL.meetings, [orderBy("createdAt", "desc"), limit(150)], [])
+  const rows = React.useMemo(() => data.filter((m) => ["forwarded", "approved", "rejected", "scheduled"].includes(m.status ?? "")), [data])
 
   const decide = async (decision: "approved" | "rejected") => {
     if (!selected || busy) return
     if (decision === "rejected" && !reply.trim()) {
-      toast.warning({
-        title: "Give a reason",
-        description: "CSU passes this back to the visitor, so it can't be blank.",
-      })
+      toast.warning({ title: "Give a reason", description: "The visitor sees this." })
       return
     }
-
     setBusy(true)
     const now = new Date().toISOString()
     try {
-      await updateDoc(doc(db, COL.meetings, selected.id), {
-        status: decision,
-        directorComment: reply,
-        responseDate: now,
-        updatedAt: now,
-      })
+      await updateDoc(doc(db, COL.meetings, selected.id), { status: decision, directorComment: reply, responseDate: now, updatedAt: now })
       await addDoc(collection(db, COL.notifications), {
         userId: "csu",
-        content: `Meeting request for ${selected.fullName ?? "a visitor"} was ${decision} by the Director.${
-          reply ? ` Note: ${reply}` : ""
-        }`,
+        content: `Meeting request for ${selected.fullName ?? "a visitor"} was ${decision} by the Director.${reply ? ` Note: ${reply}` : ""}`,
         type: decision === "approved" ? "success" : "error",
         referenceId: selected.id,
         isRead: false,
         createdAt: now,
       })
-      toast.success({
-        title: decision === "approved" ? "Meeting approved" : "Meeting rejected",
-        description: selected.fullName ?? undefined,
-      })
+      toast.success({ title: decision === "approved" ? "Meeting approved" : "Meeting rejected", description: selected.fullName })
       setSelected(null)
       setReply("")
     } catch (err) {
-      toast.error({
-        title: "Decision not saved",
-        description: err instanceof Error ? err.message : "Try again in a moment.",
-      })
+      toast.error({ title: "Decision not saved", description: err instanceof Error ? err.message : "Try again." })
     } finally {
       setBusy(false)
     }
@@ -310,53 +225,41 @@ export function DirectorMeetings() {
 
   return (
     <>
-      <Panel
-        title="Meeting requests"
-        description="Visitors CSU has forwarded for your decision"
-        bodyClassName="p-3 sm:p-4"
-      >
+      <Panel title="Meeting requests" description="Visitors CSU has forwarded for your decision" bodyClassName="p-3 sm:p-4">
         {error ? (
           <LoadFailed error={error} what="Meeting requests" />
         ) : loading ? (
           <RowsSkeleton rows={4} columns={4} />
         ) : !rows.length ? (
-          <EmptyState
-            icon={CalendarDays}
-            title="No meeting requests"
-            description="CSU screens visitor requests first — the ones worth your time arrive here."
-          />
+          <EmptyState icon={CalendarDays} title="No meeting requests" description="CSU screens requests first — the ones worth your time arrive here." />
         ) : (
           <ul className="space-y-2">
-            {rows.map((meeting, i) => (
-              <li key={meeting.id} style={{ ["--i" as string]: Math.min(i, 8) }} className="reveal">
+            {rows.map((m) => (
+              <li key={m.id}>
                 <button
                   type="button"
                   onClick={() => {
-                    setSelected(meeting)
+                    setSelected(m)
                     setReply("")
                   }}
-                  className="flex w-full flex-col gap-2 rounded-lg border border-border bg-card px-3.5 py-3 text-left transition-colors hover:bg-muted/50 sm:flex-row sm:items-center sm:justify-between"
+                  className="flex w-full flex-col gap-2 rounded-lg border border-border bg-card px-3.5 py-3 text-left hover:bg-muted/50 sm:flex-row sm:items-center sm:justify-between"
                 >
                   <div className="min-w-0">
-                    <p className="text-[13.5px] font-semibold text-foreground">{meeting.fullName}</p>
-                    <p className="text-[12.5px] text-muted-foreground">
-                      {meeting.organization || meeting.email}
-                    </p>
-                    <p className="mt-1 text-[12.5px] text-muted-foreground">
-                      {truncate(meeting.purpose, 72)}
-                    </p>
+                    <p className="text-[13.5px] font-semibold text-foreground">{m.fullName}</p>
+                    <p className="text-[12.5px] text-muted-foreground">{m.organization || m.email}</p>
+                    <p className="mt-1 text-[12.5px] text-muted-foreground">{truncate(m.purpose, 72)}</p>
                   </div>
                   <div className="flex shrink-0 flex-wrap items-center gap-2">
                     <span className="inline-flex items-center gap-1 text-[12px] text-muted-foreground">
                       <CalendarDays className="h-3.5 w-3.5" />
-                      {formatDate(meeting.preferredDate)}
+                      {formatDate(m.preferredDate)}
                     </span>
                     <span className="inline-flex items-center gap-1 text-[12px] text-muted-foreground">
                       <Clock3 className="h-3.5 w-3.5" />
-                      {meeting.preferredTime || "—"}
+                      {m.preferredTime || "—"}
                     </span>
-                    <UrgencyPill urgency={meeting.urgency} />
-                    <StatusPill status={meeting.status} />
+                    <UrgencyPill urgency={m.urgency} />
+                    <StatusPill status={m.status} />
                   </div>
                 </button>
               </li>
@@ -373,7 +276,7 @@ export function DirectorMeetings() {
         width="max-w-xl"
         footer={
           selected ? (
-            <div className="flex flex-wrap items-center justify-end gap-2">
+            <div className="flex flex-wrap justify-end gap-2">
               <ActionButton tone="quiet" onClick={() => setSelected(null)}>
                 Close
               </ActionButton>
@@ -405,36 +308,17 @@ export function DirectorMeetings() {
                 <Field label="Urgency" value={<UrgencyPill urgency={selected.urgency} />} />
                 <Field label="Requested" value={formatDateTime(selected.createdAt)} />
                 <Field label="Purpose" value={selected.purpose} className="col-span-2" />
-                {selected.notes ? (
-                  <Field label="CSU notes" value={selected.notes} className="col-span-2" />
-                ) : null}
+                {selected.notes ? <Field label="CSU notes" value={selected.notes} className="col-span-2" /> : null}
               </div>
             </div>
-
             {selected.status !== "forwarded" ? (
               <div>
                 <SectionLabel>Your decision</SectionLabel>
-                <div className="space-y-2">
-                  <StatusPill status={selected.status} />
-                  {selected.directorComment ? (
-                    <p className="text-[13px] text-muted-foreground">{selected.directorComment}</p>
-                  ) : null}
-                  {selected.responseDate ? (
-                    <p className="text-[11.5px] text-muted-foreground">
-                      Recorded {formatDateTime(selected.responseDate)}
-                    </p>
-                  ) : null}
-                </div>
+                <StatusPill status={selected.status} />
+                {selected.directorComment ? <p className="mt-2 text-[13px] text-muted-foreground">{selected.directorComment}</p> : null}
               </div>
             ) : (
-              <TextareaField
-                id="meeting-reply"
-                label="Note for CSU"
-                value={reply}
-                rows={3}
-                placeholder="Required when rejecting. CSU passes this back to the visitor."
-                onChange={setReply}
-              />
+              <TextareaField id="meeting-reply" label="Note for CSU" value={reply} rows={3} placeholder="Required when rejecting." onChange={setReply} />
             )}
           </div>
         ) : null}
@@ -442,5 +326,3 @@ export function DirectorMeetings() {
     </>
   )
 }
-
-

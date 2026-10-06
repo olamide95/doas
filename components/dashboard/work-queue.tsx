@@ -3,33 +3,18 @@
 import * as React from "react"
 import { addDoc, arrayUnion, collection, doc, limit, orderBy, updateDoc } from "firebase/firestore"
 import type { LucideIcon } from "lucide-react"
-import { Check, Inbox, MapPin } from "lucide-react"
+import { Check, Inbox, Lock, MapPin } from "lucide-react"
 import { COL, db } from "@/lib/firebase"
-import {
-  REGISTER_COLLECTION,
-  expiryFrom,
-  isBlocked,
-  notifyIdFor,
-  permitNumber,
-  stageIndex,
-  stagesFor,
-  type RegisterCategory,
-} from "@/lib/workflow"
+import { REGISTER_COLLECTION, STATUS, expiryFrom, isBlocked, notifyIdFor, permitNumber, stageIndex, stagesFor, type RegisterCategory } from "@/lib/workflow"
+import { isLit, typeLabel, type Measurements } from "@/lib/tariff"
 import { useMergedCollections } from "@/hooks/use-firestore"
 import { formatDate, formatDateTime, naira, toMillis, truncate } from "@/lib/format"
 import { toast } from "@/components/ui/toast"
 import { Sheet } from "@/components/dashboard/sheet"
 import { ActionButton, SearchField, TextareaField } from "@/components/dashboard/form-kit"
-import {
-  EmptyState,
-  Field,
-  LoadFailed,
-  Panel,
-  RowsSkeleton,
-  SectionLabel,
-  StatusPill,
-} from "@/components/dashboard/kit"
+import { EmptyState, Field, LoadFailed, Panel, RowsSkeleton, SectionLabel, StatusPill } from "@/components/dashboard/kit"
 import { Segmented } from "@/components/dashboard/notifications-panel"
+import { AuditTimeline, type AuditEntry } from "@/components/dashboard/audit-timeline"
 import { cn } from "@/lib/utils"
 
 export type Route = "first" | "third"
@@ -38,8 +23,17 @@ export interface SubmissionRow {
   id: string
   route: Route
   submissionId?: string
+  applicantType?: string
   applicantName?: string
   companyName?: string
+  cacRegistrationNumber?: string
+  tin?: string
+  corporateAddress?: string
+  primaryContactName?: string
+  primaryContactPhone?: string
+  primaryContactEmail?: string
+  signageSiteAddress?: string
+  areaCouncil?: string
   email?: string
   contactPhoneNumber?: string
   applicationType?: string
@@ -59,15 +53,21 @@ export interface SubmissionRow {
   status?: string
   department?: string
   directorReason?: string
+  deskQuery?: string
   permitNumber?: string
+  registerId?: string
+  startsAt?: string
+  expiresAt?: string
+  measurements?: Measurements
   billing?: Record<string, unknown>
-  siteVisitReport?: Record<string, unknown>
+  payment?: Record<string, unknown>
   businessDevelopmentReport?: Record<string, unknown>
+  technicalReport?: Record<string, unknown>
+  siteVisitReport?: Record<string, unknown>
   inspectionReport?: Record<string, unknown>
-  planningReport?: Record<string, unknown>
   files?: Record<string, unknown>
   documents?: Record<string, unknown>
-  comments?: { text: string; timestamp: string; action: string }[]
+  comments?: AuditEntry[]
   createdAt?: unknown
   updatedAt?: unknown
 }
@@ -79,18 +79,15 @@ export interface QueueAction {
   tone?: "primary" | "danger"
   status: string
   department: string
-  /** Text recorded in the application history. */
+  /** Text recorded in the audit trail. */
   record: string
   notify?: string
   kind?: "success" | "error" | "info"
-  /** Require the draft form to validate before this action runs. */
   needsDraft?: boolean
-  /**
-   * Block the action until a reason is written. Every decline and every
-   * return-for-changes uses this — the applicant has to be told why.
-   */
   requiresReason?: boolean
-  /** Write the applicant into the permit register as they're approved. */
+  /** Extra guard evaluated against the draft and row before running. */
+  check?: (draft: Record<string, unknown> | null, row: SubmissionRow) => string | null
+  /** Final sign-off: issue the permit and write/refresh the register entry. */
   register?: RegisterCategory
 }
 
@@ -111,10 +108,11 @@ export interface QueueDraft<T extends Record<string, unknown>> {
   title: string
   initial: (row: SubmissionRow) => T
   render: (draft: T, set: (patch: Partial<T>) => void, row: SubmissionRow) => React.ReactNode
-  validate?: (draft: T) => string | null
+  validate?: (draft: T, row: SubmissionRow) => string | null
+  /** Additional fields written alongside the draft (e.g. locked measurements). */
+  derive?: (draft: T, row: SubmissionRow, ctx: { now: string; actorId: string }) => Record<string, unknown>
 }
 
-/** Live feed of both submission collections, newest first. */
 export function useSubmissions(max = 250) {
   const { data, loading, error } = useMergedCollections<Omit<SubmissionRow, "id" | "route">>(
     [
@@ -123,12 +121,7 @@ export function useSubmissions(max = 250) {
     ],
     (row) => toMillis(row.createdAt),
   )
-
-  const rows = React.useMemo(
-    () => data.map((row) => ({ ...row, route: row.source as Route })) as SubmissionRow[],
-    [data],
-  )
-
+  const rows = React.useMemo(() => data.map((row) => ({ ...row, route: row.source as Route })) as SubmissionRow[], [data])
   return { rows, loading, error }
 }
 
@@ -152,15 +145,7 @@ interface WorkQueueProps<T extends Record<string, unknown>> {
   extraDetail?: (row: SubmissionRow) => React.ReactNode
 }
 
-export function WorkQueue<T extends Record<string, unknown>>({
-  title,
-  description,
-  department,
-  actorId,
-  views,
-  draft,
-  extraDetail,
-}: WorkQueueProps<T>) {
+export function WorkQueue<T extends Record<string, unknown>>({ title, description, department, actorId, views, draft, extraDetail }: WorkQueueProps<T>) {
   const { rows, loading, error } = useSubmissions()
   const [viewValue, setViewValue] = React.useState(views[0]?.value ?? "")
   const [search, setSearch] = React.useState("")
@@ -176,15 +161,15 @@ export function WorkQueue<T extends Record<string, unknown>>({
     return rows.filter((row) => {
       if (!matches(row, view, department)) return false
       if (!term) return true
-      return [row.applicantName, row.submissionId, row.email, row.companyName]
+      return [row.applicantName, row.companyName, row.submissionId, row.email, row.permitNumber]
         .filter(Boolean)
-        .some((value) => String(value).toLowerCase().includes(term))
+        .some((v) => String(v).toLowerCase().includes(term))
     })
   }, [rows, view, department, search])
 
   React.useEffect(() => {
     if (!selected) return
-    const fresh = rows.find((row) => row.id === selected.id && row.route === selected.route)
+    const fresh = rows.find((r) => r.id === selected.id && r.route === selected.route)
     if (fresh && fresh.updatedAt !== selected.updatedAt) setSelected(fresh)
   }, [rows, selected])
 
@@ -193,7 +178,7 @@ export function WorkQueue<T extends Record<string, unknown>>({
   const open = (row: SubmissionRow) => {
     setSelected(row)
     setNote("")
-    setDraftValue(draft ? draft.initial(row) : null)
+    setDraftValue(draft && draft.views.includes(view.value) ? draft.initial(row) : null)
   }
 
   const close = () => {
@@ -206,130 +191,133 @@ export function WorkQueue<T extends Record<string, unknown>>({
     if (!selected || busy) return
 
     if (action.requiresReason && !note.trim()) {
-      toast.warning({
-        title: "Give a reason",
-        description: "The applicant is told why, so this can't be left blank.",
-      })
+      toast.warning({ title: "Give a reason", description: "This is recorded on the file, so it can't be blank." })
       return
     }
-
     if (action.needsDraft && draft && draftValue) {
-      const problem = draft.validate?.(draftValue)
+      const problem = draft.validate?.(draftValue, selected)
       if (problem) {
-        toast.warning({ title: "Report incomplete", description: problem })
+        toast.warning({ title: "Not ready", description: problem })
         return
       }
+    }
+    const blocked = action.check?.(draftValue as Record<string, unknown> | null, selected)
+    if (blocked) {
+      toast.warning({ title: "Can't do that yet", description: blocked })
+      return
     }
 
     setBusy(true)
     const now = new Date().toISOString()
+    const entry: AuditEntry = {
+      text: note.trim() || action.record,
+      timestamp: now,
+      action: action.record,
+      desk: actorId,
+      from: selected.department ?? "",
+      to: action.department,
+      status: action.status,
+    }
     const payload: Record<string, unknown> = {
       status: action.status,
       department: action.department,
-      comments: arrayUnion({ text: note || action.record, timestamp: now, action: action.record }),
+      comments: arrayUnion(entry),
       updatedAt: now,
     }
 
-    if (action.requiresReason) payload.directorReason = note.trim()
+    if (action.requiresReason) payload[isBlocked(action.status) ? "directorReason" : "deskQuery"] = note.trim()
+
     if (action.needsDraft && draft && draftValue) {
       payload[draft.field] = { ...draftValue, submittedAt: now, submittedBy: actorId }
+      Object.assign(payload, draft.derive?.(draftValue, selected, { now, actorId }) ?? {})
     }
 
     let permit: string | null = null
+    let startsAt = ""
+    let expiresAt = ""
     if (action.register) {
+      const billing = (selected.billing ?? {}) as Record<string, unknown>
+      startsAt = String(billing.subscriptionStartDate ?? now.slice(0, 10))
+      expiresAt = String(billing.subscriptionExpiryDate ?? expiryFrom(new Date(now)))
       permit = selected.permitNumber ?? permitNumber(action.register)
-      payload.permitNumber = permit
-      payload.approvedAt = now
-      payload.expiresAt = expiryFrom(new Date(now))
+      Object.assign(payload, { permitNumber: permit, approvedAt: now, startsAt, expiresAt })
     }
 
     try {
-      await updateDoc(doc(db, collectionFor(selected.route), selected.id), payload)
+      const ref = doc(db, collectionFor(selected.route), selected.id)
+      await updateDoc(ref, payload)
 
       if (action.register && permit) {
-        await addDoc(collection(db, REGISTER_COLLECTION), {
+        const billing = (selected.billing ?? {}) as Record<string, unknown>
+        const registerEntry = {
           category: action.register,
           permitNumber: permit,
           submissionId: selected.submissionId ?? selected.id,
           submissionRef: selected.id,
           route: selected.route,
-          holderName: selected.applicantName ?? "",
+          holderName: selected.companyName ?? selected.applicantName ?? "",
           companyName: selected.companyName ?? "",
-          email: selected.email ?? "",
-          phone: selected.contactPhoneNumber ?? "",
-          address: [selected.addressLine1, selected.addressLine2].filter(Boolean).join(", "),
+          email: selected.primaryContactEmail ?? selected.email ?? "",
+          phone: selected.primaryContactPhone ?? selected.contactPhoneNumber ?? "",
+          address: selected.signageSiteAddress ?? selected.addressLine1 ?? "",
+          areaCouncil: selected.areaCouncil ?? "",
           gpsCoordinates: selected.gpsCoordinates ?? "",
-          signageType: selected.typeOfSign ?? selected.applicationType ?? "",
+          signageType: selected.applicationType ?? "",
+          totalSqm: selected.measurements?.totalSqm ?? 0,
           practitionerName: selected.practitionerName ?? "",
           practitionerLicenseNumber: selected.practitionerLicenseNumber ?? "",
+          invoiceNumber: billing.invoiceNumber ?? "",
+          lastInvoiceAmount: billing.netInvoiceAmount ?? 0,
+          cycle: Number(billing.cycle ?? 1),
           status: "Active",
           approvedAt: now,
-          expiresAt: expiryFrom(new Date(now)),
+          startsAt,
+          expiresAt,
           registeredBy: actorId,
-        })
+        }
+        if (selected.registerId) {
+          await updateDoc(doc(db, REGISTER_COLLECTION, selected.registerId), { ...registerEntry, renewedAt: now })
+        } else {
+          const created = await addDoc(collection(db, REGISTER_COLLECTION), registerEntry)
+          await updateDoc(ref, { registerId: created.id })
+        }
       }
 
-      await addDoc(collection(db, COL.activity), {
-        submissionId: selected.id,
-        action: action.record,
-        comment: note,
-        timestamp: now,
-        userId: actorId,
-      })
+      await addDoc(collection(db, COL.activity), { submissionId: selected.id, action: action.record, comment: note, timestamp: now, userId: actorId })
 
       await addDoc(collection(db, COL.notifications), {
         userId: action.notify ?? notifyIdFor(action.department),
-        content: `${action.record} — ${selected.applicantName ?? "application"}${
-          note.trim() ? `: ${note.trim()}` : ""
-        }`,
+        content: `${action.record} — ${selected.companyName ?? selected.applicantName ?? "application"}${note.trim() ? `: ${note.trim()}` : ""}`,
         type: action.kind ?? "info",
         referenceId: selected.id,
         isRead: false,
         createdAt: now,
       })
 
-      toast.success({
-        title: action.record,
-        description: permit ? `Permit ${permit}` : (selected.applicantName ?? undefined),
-      })
+      toast.success({ title: action.record, description: permit ? `Permit ${permit}` : selected.submissionId })
       close()
     } catch (err) {
-      toast.error({
-        title: "Action not saved",
-        description: err instanceof Error ? err.message : "Try again in a moment.",
-      })
+      toast.error({ title: "Action not saved", description: err instanceof Error ? err.message : "Try again in a moment." })
     } finally {
       setBusy(false)
     }
   }
 
   const actions = selected ? (view.actionsFor?.(selected) ?? view.actions ?? []) : []
-  const needsReason = actions.some((action) => action.requiresReason)
+  const needsReason = actions.some((a) => a.requiresReason)
+  const showQuery = selected?.deskQuery && ([STATUS.billingQueried, STATUS.paymentFlagged] as string[]).includes(selected.status ?? "")
 
   return (
     <>
       <Panel
         title={title}
         description={description}
-        actions={
-          views.length > 1 ? (
-            <Segmented
-              value={view.value}
-              onChange={setViewValue}
-              options={views.map((v) => ({ value: v.value, label: v.label }))}
-            />
-          ) : null
-        }
+        actions={views.length > 1 ? <Segmented value={view.value} onChange={setViewValue} options={views.map((v) => ({ value: v.value, label: v.label }))} /> : null}
         bodyClassName="p-0"
       >
         <div className="border-b border-border p-3 sm:px-5">
-          <SearchField
-            value={search}
-            onChange={setSearch}
-            placeholder="Search by applicant, reference or email"
-          />
+          <SearchField value={search} onChange={setSearch} placeholder="Search by company, reference, email or permit" />
         </div>
-
         <div className="p-3 sm:p-4">
           {error ? (
             <LoadFailed error={error} what="Applications" />
@@ -346,25 +334,17 @@ export function WorkQueue<T extends Record<string, unknown>>({
       <Sheet
         open={Boolean(selected)}
         onClose={close}
-        title={draftActive && draft ? draft.title : "Application review"}
-        caption={
-          selected ? `${selected.submissionId ?? selected.id} · ${selected.applicantName ?? ""}` : ""
-        }
-        width={draftActive ? "max-w-3xl" : "max-w-2xl"}
+        title={draftActive && draft ? draft.title : "File review"}
+        caption={selected ? `${selected.submissionId ?? selected.id} · ${selected.companyName ?? selected.applicantName ?? ""}` : ""}
+        width={draftActive ? "max-w-4xl" : "max-w-2xl"}
         footer={
           <div className="flex flex-wrap items-center justify-end gap-2">
             <ActionButton tone="quiet" onClick={close}>
               Close
             </ActionButton>
-            {actions.map((action) => (
-              <ActionButton
-                key={action.key}
-                tone={action.tone ?? "primary"}
-                icon={action.icon}
-                disabled={busy}
-                onClick={() => run(action)}
-              >
-                {busy ? "Saving…" : action.label}
+            {actions.map((a) => (
+              <ActionButton key={a.key} tone={a.tone ?? "primary"} icon={a.icon} disabled={busy} onClick={() => run(a)}>
+                {busy ? "Saving…" : a.label}
               </ActionButton>
             ))}
           </div>
@@ -374,46 +354,30 @@ export function WorkQueue<T extends Record<string, unknown>>({
           <div className="space-y-6">
             <StageTracker row={selected} />
 
-            {selected.directorReason && isBlocked(selected.status) ? (
-              <div className="rounded-lg border border-[hsl(var(--state-stop))]/30 bg-[hsl(var(--state-stop-soft))] px-4 py-3">
-                <p className="text-[12.5px] font-semibold text-[hsl(var(--state-stop))]">
-                  Reason given
-                </p>
-                <p className="mt-1 text-[13px] leading-relaxed text-foreground">
-                  {selected.directorReason}
-                </p>
-              </div>
-            ) : null}
+            {selected.directorReason && isBlocked(selected.status) ? <Notice title="Reason given" body={selected.directorReason} /> : null}
+            {showQuery ? <Notice title="Query raised" body={selected.deskQuery as string} /> : null}
 
             <ApplicationSummary row={selected} />
+            {selected.measurements ? <LockedMeasurements m={selected.measurements} /> : null}
 
             {draftActive && draft && draftValue ? (
               <div>
                 <SectionLabel>{draft.title}</SectionLabel>
-                {draft.render(
-                  draftValue,
-                  (patch) => setDraftValue((prev) => ({ ...(prev as T), ...patch })),
-                  selected,
-                )}
+                {draft.render(draftValue, (patch) => setDraftValue((prev) => ({ ...(prev as T), ...patch })), selected)}
               </div>
             ) : null}
 
             {extraDetail?.(selected)}
-
             <ExistingReports row={selected} />
             <Attachments row={selected} />
-            <History row={selected} />
+            <AuditTimeline row={selected} />
 
             <TextareaField
               id="queue-note"
               label={needsReason ? "Reason or note" : "Note for the next desk"}
               value={note}
               onChange={setNote}
-              placeholder={
-                needsReason
-                  ? "Required when declining or returning a file. The applicant is told what you write here."
-                  : "Saved to the application history and shown to whoever picks this up next."
-              }
+              placeholder={needsReason ? "Required for declines, returns, queries and flags. Recorded on the file." : "Saved to the audit log and shown to whoever picks this up next."}
             />
           </div>
         ) : null}
@@ -422,46 +386,38 @@ export function WorkQueue<T extends Record<string, unknown>>({
   )
 }
 
-/** Where the file is in its chain. Derived from status, not stored. */
+function Notice({ title, body }: { title: string; body: string }) {
+  return (
+    <div className="rounded-lg border border-[hsl(var(--state-stop))]/30 bg-[hsl(var(--state-stop-soft))] px-4 py-3">
+      <p className="text-[12.5px] font-semibold text-[hsl(var(--state-stop))]">{title}</p>
+      <p className="mt-1 text-[13px] leading-relaxed text-foreground">{body}</p>
+    </div>
+  )
+}
+
 export function StageTracker({ row }: { row: SubmissionRow }) {
   const stages = stagesFor(row.route)
   const current = stageIndex(row.route, row.status)
   const blocked = isBlocked(row.status)
-
   return (
     <div>
       <div className="mb-2 flex items-center justify-between gap-3">
-        <p className="text-[12.5px] font-medium text-muted-foreground">
-          {row.route === "first" ? "First-party route" : "Third-party route"}
-        </p>
+        <p className="text-[12.5px] font-medium text-muted-foreground">{row.route === "first" ? "First-party route" : "Third-party route"}</p>
         <StatusPill status={row.status} />
       </div>
-
       <ol className="flex items-stretch gap-1">
         {stages.map((entry, index) => {
           const done = current > index
           const active = current === index && !blocked
           return (
-            <li key={entry.label} className="min-w-0 flex-1">
+            <li key={`${entry.label}-${index}`} className="min-w-0 flex-1">
               <span
                 className={cn(
-                  "block h-1 rounded-full transition-colors",
-                  blocked
-                    ? "bg-[hsl(var(--state-stop))]/30"
-                    : done
-                      ? "bg-[hsl(var(--state-clear))]"
-                      : active
-                        ? "bg-[hsl(var(--state-wait))]"
-                        : "bg-border",
+                  "block h-1 rounded-full",
+                  blocked ? "bg-[hsl(var(--state-stop))]/30" : done ? "bg-[hsl(var(--state-clear))]" : active ? "bg-[hsl(var(--state-wait))]" : "bg-border",
                 )}
               />
-              <p
-                className={cn(
-                  "mt-1.5 truncate text-[10.5px] leading-tight",
-                  active ? "font-semibold text-foreground" : "text-muted-foreground",
-                )}
-                title={`${entry.label} · ${entry.desk}`}
-              >
+              <p className={cn("mt-1.5 truncate text-[10.5px] leading-tight", active ? "font-semibold text-foreground" : "text-muted-foreground")} title={`${entry.label} · ${entry.desk}`}>
                 {done ? <Check className="mr-0.5 inline h-2.5 w-2.5" aria-hidden /> : null}
                 {entry.label}
               </p>
@@ -469,25 +425,12 @@ export function StageTracker({ row }: { row: SubmissionRow }) {
           )
         })}
       </ol>
-
-      {blocked ? (
-        <p className="mt-2 text-[12px] text-[hsl(var(--state-stop))]">
-          Held at the Director&rsquo;s decision. The applicant has to act before this moves again.
-        </p>
-      ) : null}
+      {blocked ? <p className="mt-2 text-[12px] text-[hsl(var(--state-stop))]">Held at the Director&rsquo;s decision. The applicant has to act first.</p> : null}
     </div>
   )
 }
 
-function QueueTable({
-  rows,
-  view,
-  onOpen,
-}: {
-  rows: SubmissionRow[]
-  view: QueueView
-  onOpen: (row: SubmissionRow) => void
-}) {
+function QueueTable({ rows, view, onOpen }: { rows: SubmissionRow[]; view: QueueView; onOpen: (row: SubmissionRow) => void }) {
   return (
     <div className="overflow-x-auto scroll-slim">
       <table className="w-full border-collapse text-left">
@@ -496,11 +439,7 @@ function QueueTable({
             <th className="px-3 py-2.5">Reference</th>
             <th className="px-3 py-2.5">Applicant</th>
             <th className="hidden px-3 py-2.5 md:table-cell">Type</th>
-            {view.column ? (
-              <th className="hidden px-3 py-2.5 lg:table-cell">{view.column.header}</th>
-            ) : (
-              <th className="hidden px-3 py-2.5 lg:table-cell">Site</th>
-            )}
+            <th className="hidden px-3 py-2.5 lg:table-cell">{view.column?.header ?? "Site"}</th>
             <th className="px-3 py-2.5">Status</th>
             <th className="hidden px-3 py-2.5 sm:table-cell">Received</th>
             <th className="px-3 py-2.5 text-right">Action</th>
@@ -508,24 +447,14 @@ function QueueTable({
         </thead>
         <tbody>
           {rows.map((row, i) => (
-            <tr
-              key={`${row.route}-${row.id}`}
-              style={{ ["--i" as string]: Math.min(i, 10) }}
-              className="reveal border-b border-border/70 transition-colors last:border-0 hover:bg-muted/50"
-            >
-              <td className="px-3 py-3 font-mono text-[12px] text-muted-foreground">
-                {row.submissionId ?? row.id.slice(0, 8)}
-              </td>
+            <tr key={`${row.route}-${row.id}`} style={{ ["--i" as string]: Math.min(i, 10) }} className="reveal border-b border-border/70 last:border-0 hover:bg-muted/50">
+              <td className="px-3 py-3 font-mono text-[12px] text-muted-foreground">{row.submissionId ?? row.id.slice(0, 8)}</td>
               <td className="px-3 py-3">
-                <p className="text-[13.5px] font-medium text-foreground">
-                  {row.applicantName ?? "—"}
-                </p>
-                <p className="text-[11.5px] text-muted-foreground">
-                  {row.companyName ?? row.email ?? ""}
-                </p>
+                <p className="text-[13.5px] font-medium text-foreground">{row.companyName ?? row.applicantName ?? "—"}</p>
+                <p className="text-[11.5px] text-muted-foreground">{row.primaryContactName ?? row.email ?? ""}</p>
               </td>
               <td className="hidden px-3 py-3 text-[13px] text-muted-foreground md:table-cell">
-                {truncate(row.applicationType, 26)}
+                {row.route === "first" ? "FP" : "3P"} · {truncate(typeLabel(row.applicationType), 22)}
               </td>
               <td className="hidden px-3 py-3 text-[12.5px] text-muted-foreground lg:table-cell">
                 {view.column ? (
@@ -536,15 +465,13 @@ function QueueTable({
                     {truncate(row.gpsCoordinates, 22)}
                   </span>
                 ) : (
-                  "—"
+                  (row.areaCouncil ?? "—")
                 )}
               </td>
               <td className="px-3 py-3">
                 <StatusPill status={row.status} />
               </td>
-              <td className="hidden px-3 py-3 text-[12.5px] text-muted-foreground sm:table-cell">
-                {formatDate(row.createdAt)}
-              </td>
+              <td className="hidden px-3 py-3 text-[12.5px] text-muted-foreground sm:table-cell">{formatDate(row.createdAt)}</td>
               <td className="px-3 py-3 text-right">
                 <ActionButton tone="quiet" onClick={() => onOpen(row)}>
                   Open
@@ -563,105 +490,140 @@ export function ApplicationSummary({ row }: { row: SubmissionRow }) {
     <div>
       <SectionLabel>Application</SectionLabel>
       <div className="grid grid-cols-2 gap-4">
-        <Field label="Applicant" value={row.applicantName} />
-        <Field label="Route" value={row.route === "first" ? "First party" : "Third party"} />
-        <Field label="Email" value={row.email} />
-        <Field label="Phone" value={row.contactPhoneNumber} />
+        <Field label="Organisation" value={row.companyName ?? row.applicantName} />
+        <Field label="Applicant type" value={row.applicantType ?? (row.route === "first" ? "First-Party" : "Third-Party Agency")} />
+        <Field label="CAC number" value={row.cacRegistrationNumber ?? row.companyRegistrationNumber} mono />
+        <Field label="TIN" value={row.tin} mono />
+        <Field label="Contact" value={row.primaryContactName} />
+        <Field label="Phone" value={row.primaryContactPhone ?? row.contactPhoneNumber} />
+        <Field label="Email" value={row.primaryContactEmail ?? row.email} />
+        <Field label="Area council" value={row.areaCouncil} />
         <Field label="Reference" value={row.submissionId} mono />
         <Field label="Received" value={formatDateTime(row.createdAt)} />
         {row.permitNumber ? <Field label="Permit number" value={row.permitNumber} mono /> : null}
-        {row.companyName ? <Field label="Company" value={row.companyName} /> : null}
-        {row.companyRegistrationNumber ? (
-          <Field label="Company reg. no." value={row.companyRegistrationNumber} mono />
-        ) : null}
-        <Field label="Application type" value={row.applicationType} />
         <Field label="Currently with" value={row.department} />
-        <Field
-          label="Site"
-          value={[row.addressLine1, row.addressLine2].filter(Boolean).join(", ")}
-          className="col-span-2"
-        />
-        {row.gpsCoordinates ? (
-          <Field label="Coordinates" value={row.gpsCoordinates} mono className="col-span-2" />
-        ) : null}
-        {row.purposeOfApplication ? (
-          <Field label="Purpose" value={row.purposeOfApplication} className="col-span-2" />
-        ) : null}
+        <Field label="Corporate address" value={row.corporateAddress ?? row.companyAddress} className="col-span-2" />
+        <Field label="Signage site" value={row.signageSiteAddress ?? row.addressLine1} className="col-span-2" />
+        {row.gpsCoordinates ? <Field label="Declared coordinates" value={row.gpsCoordinates} mono className="col-span-2" /> : null}
       </div>
+      <div className="mt-4 grid grid-cols-2 gap-4 rounded-lg bg-muted/40 p-3.5">
+        <Field label="Declared structure" value={typeLabel(row.applicationType)} />
+        <Field label="Purpose" value={row.purposeOfApplication} />
+        <Field label="Declared dimensions" value={row.signDimensions} />
+        <Field label="Declared number of signs" value={row.numberOfSigns} />
+        {row.practitionerName ? <Field label="Practitioner" value={row.practitionerName} /> : null}
+        {row.practitionerLicenseNumber ? <Field label="Licence" value={row.practitionerLicenseNumber} mono /> : null}
+      </div>
+    </div>
+  )
+}
 
-      {row.signDimensions || row.typeOfSign || row.structuralHeight ? (
-        <div className="mt-4 grid grid-cols-2 gap-4 rounded-lg bg-muted/40 p-3.5">
-          <Field label="Sign dimensions" value={row.signDimensions} />
-          <Field label="Structural height" value={row.structuralHeight} />
-          <Field label="Number of signs" value={row.numberOfSigns} />
-          <Field label="Type of sign" value={row.typeOfSign} />
-          <Field label="Duration" value={row.structureDuration} />
-        </div>
-      ) : null}
-
-      {row.practitionerName ? (
-        <div className="mt-4 grid grid-cols-2 gap-4 rounded-lg bg-muted/40 p-3.5">
-          <Field label="Practitioner" value={row.practitionerName} />
-          <Field label="Licence" value={row.practitionerLicenseNumber} mono />
-        </div>
-      ) : null}
+export function LockedMeasurements({ m }: { m: Measurements }) {
+  return (
+    <div>
+      <SectionLabel>
+        <span className="inline-flex items-center gap-1.5">
+          <Lock className="h-3.5 w-3.5" /> Locked field parameters
+        </span>
+      </SectionLabel>
+      <ul className="space-y-1.5 font-mono text-[12px] text-foreground">
+        {m.items.map((item, i) => (
+          <li key={item.id} className="rounded-md bg-muted/40 px-3 py-2">
+            Structure {i + 1}: {typeLabel(item.type)} [{isLit(item.illumination) ? "Illuminated" : "Non-lit"}] | Dim: {item.height.toFixed(2)}m × {item.width.toFixed(2)}m
+            {item.faces > 1 ? ` × ${item.faces} faces` : ""} | Area: {item.sqm.toFixed(2)} SQM
+          </li>
+        ))}
+      </ul>
+      <p className="mt-2 text-[12.5px] text-muted-foreground">
+        Total exposure <span className="font-semibold text-foreground">{m.totalSqm.toFixed(2)} SQM</span> · locked by{" "}
+        {m.source === "business_development" ? "Business Development" : "Planning"} on {formatDateTime(m.lockedAt)}
+      </p>
     </div>
   )
 }
 
 function ExistingReports({ row }: { row: SubmissionRow }) {
-  const reports: [string, Record<string, unknown> | undefined][] = [
-    ["Business Development site visit", row.businessDevelopmentReport],
-    ["Monitoring inspection", row.inspectionReport ?? row.siteVisitReport],
-    ["Planning report", row.planningReport],
-  ]
+  const bd = row.businessDevelopmentReport as Record<string, unknown> | undefined
+  const tech = row.technicalReport as Record<string, unknown> | undefined
+  const billing = row.billing as Record<string, unknown> | undefined
+  const payment = row.payment as Record<string, unknown> | undefined
+  const declared = (payment?.declared ?? undefined) as Record<string, unknown> | undefined
 
-  const present = reports.filter(([, value]) => value && Object.keys(value).length)
-  if (!present.length && !row.billing) return null
+  const bdPhotos =
+    bd && Array.isArray(bd.signs) ? (bd.signs as Record<string, string>[]).flatMap((s) => [s.sitePhotoFront, s.sitePhotoContext]).filter(Boolean) : []
 
   return (
     <>
-      {present.map(([label, report]) => (
-        <div key={label}>
-          <SectionLabel>{label}</SectionLabel>
+      {bd ? (
+        <div>
+          <SectionLabel>Business Development inspection</SectionLabel>
           <div className="grid grid-cols-2 gap-4">
-            {Object.entries(report as Record<string, unknown>)
-              .filter(([key, value]) => key !== "sitePhotos" && typeof value === "string" && value)
-              .slice(0, 18)
-              .map(([key, value]) => (
-                <Field key={key} label={labelise(key)} value={String(value)} />
-              ))}
+            <Field label="Inspected" value={formatDateTime(bd.inspectionTimestamp)} />
+            <Field label="Officer" value={String(bd.assignedOfficerName || bd.assignedOfficerId || "")} />
+            <Field label="Occupancy" value={String(bd.buildingOccupancyType ?? "")} />
+            <Field label="Signs on site" value={String(bd.numberOfSignagesOnSite ?? "")} />
+            <Field label="Field notes" value={String(bd.fieldNotes ?? "")} className="col-span-2" />
           </div>
-          {Array.isArray((report as Record<string, unknown>).sitePhotos) ? (
-            <PhotoGrid urls={(report as { sitePhotos: string[] }).sitePhotos} />
-          ) : null}
+          <PhotoGrid urls={bdPhotos as string[]} />
         </div>
-      ))}
+      ) : null}
 
-      {row.billing ? (
+      {tech ? (
+        <div>
+          <SectionLabel>Planning technical vetting</SectionLabel>
+          <div className="grid grid-cols-2 gap-4">
+            <Field label="Structure" value={typeLabel(String(tech.structureType ?? ""))} />
+            <Field label="Foundation depth" value={tech.foundationDepthMeters ? `${tech.foundationDepthMeters} m` : ""} />
+            <Field label="COREN engineer" value={String(tech.corenEngineerName ?? "")} />
+            <Field label="COREN licence" value={String(tech.corenLicenseNumber ?? "")} mono />
+            <Field label="Setback from road" value={tech.setbackFromRoadMeters ? `${tech.setbackFromRoadMeters} m` : ""} />
+            <Field label="Clash detection" value={<StatusPill status={String(tech.clashDetectionStatus ?? "")} />} />
+            <Field label="Traffic sightline" value={tech.trafficSightlineClearance ? "Clear" : "Not clear"} />
+            <Field label="Utility lines" value={tech.utilityLineClearance ? "Clear" : "Not clear"} />
+            {tech.structuralIntegrityCert ? (
+              <Field
+                label="Structural certificate"
+                value={
+                  <a className="text-accent underline-offset-4 hover:underline" href={String(tech.structuralIntegrityCert)} target="_blank" rel="noopener noreferrer">
+                    Open
+                  </a>
+                }
+              />
+            ) : null}
+            <Field label="Notes" value={String(tech.vettingNotes ?? "")} className="col-span-2" />
+          </div>
+        </div>
+      ) : null}
+
+      {billing && billing.netInvoiceAmount !== undefined ? (
         <div>
           <SectionLabel>Billing</SectionLabel>
           <div className="grid grid-cols-2 gap-4">
-            <Field label="Invoice" value={String(row.billing.invoiceNumber ?? "")} mono />
-            <Field label="Due" value={formatDate(row.billing.dueDate)} />
-            <Field label="Application fee" value={naira(row.billing.applicationFee as number)} />
-            <Field label="Processing fee" value={naira(row.billing.processingFee as number)} />
-            <Field label="Annual fee" value={naira(row.billing.annualFee as number)} />
-            <Field
-              label="Total"
-              value={
-                <span className="figure text-[16px] font-semibold">
-                  {naira(row.billing.totalAmount as number)}
-                </span>
-              }
-            />
-            <Field
-              label="Payment"
-              value={<StatusPill status={String(row.billing.paymentStatus ?? "Pending")} />}
-            />
-            {row.billing.paymentReference ? (
-              <Field label="Reference" value={String(row.billing.paymentReference)} mono />
-            ) : null}
+            <Field label="Invoice" value={String(billing.invoiceNumber ?? "")} mono />
+            <Field label="Cycle" value={`#${billing.cycle ?? 1} · ${String(billing.billingCycleType ?? "").replace(/_/g, " ")}`} />
+            <Field label="Schedule" value={String(billing.scheduleName ?? "")} />
+            <Field label="Zone" value={`${billing.zone ?? ""} (${billing.zoneMultiplier ?? ""}×)`} />
+            <Field label="Base computation" value={naira(billing.baseComputation as number)} />
+            <Field label="Illumination surcharge" value={naira(billing.illuminationSurcharge as number)} />
+            <Field label="Penalty" value={naira(billing.penaltyLoadingFee as number)} />
+            <Field label="Waiver" value={naira(billing.waiverAmount as number)} />
+            <Field label="Net invoice" value={<span className="figure text-[16px] font-semibold">{naira(billing.netInvoiceAmount as number)}</span>} />
+            <Field label="Validity" value={`${formatDate(billing.subscriptionStartDate)} → ${formatDate(billing.subscriptionExpiryDate)}`} />
+          </div>
+        </div>
+      ) : null}
+
+      {payment && (declared || payment.reconciliationStatus) ? (
+        <div>
+          <SectionLabel>Payment</SectionLabel>
+          <div className="grid grid-cols-2 gap-4">
+            <Field label="Declared RRR" value={String(declared?.rrr ?? "")} mono />
+            <Field label="Declared amount" value={naira(declared?.amount as number)} />
+            <Field label="Verified RRR" value={String(payment.remitaRrr ?? "")} mono />
+            <Field label="Amount credited" value={naira(payment.amountCredited as number)} />
+            <Field label="Ledger" value={String(payment.financeLedgerCode ?? "")} />
+            <Field label="Reconciliation" value={<StatusPill status={String(payment.reconciliationStatus ?? "Unverified")} />} />
+            {Number(payment.balanceDue) > 0 ? <Field label="Balance due" value={naira(payment.balanceDue as number)} /> : null}
           </div>
         </div>
       ) : null}
@@ -674,20 +636,9 @@ export function PhotoGrid({ urls }: { urls: string[] }) {
   return (
     <div className="mt-3 grid grid-cols-3 gap-2 sm:grid-cols-4">
       {urls.map((url, i) => (
-        <a
-          key={`${url}-${i}`}
-          href={url}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="aspect-square overflow-hidden rounded-lg border border-border"
-        >
+        <a key={`${url}-${i}`} href={url} target="_blank" rel="noopener noreferrer" className="aspect-square overflow-hidden rounded-lg border border-border">
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src={url}
-            alt={`Site photograph ${i + 1}`}
-            loading="lazy"
-            className="h-full w-full object-cover transition-transform hover:scale-105"
-          />
+          <img src={url} alt={`Site photograph ${i + 1}`} loading="lazy" className="h-full w-full object-cover" />
         </a>
       ))}
     </div>
@@ -697,63 +648,21 @@ export function PhotoGrid({ urls }: { urls: string[] }) {
 function Attachments({ row }: { row: SubmissionRow }) {
   const source = row.files ?? row.documents
   if (!source) return null
-
-  const entries = Object.entries(source).filter(
-    ([key, value]) => key !== "sitePhotos" && typeof value === "string" && value,
-  )
+  const entries = Object.entries(source).filter(([, v]) => typeof v === "string" && v)
   if (!entries.length) return null
-
   return (
     <div>
       <SectionLabel>Documents</SectionLabel>
       <ul className="space-y-2">
         {entries.map(([key, url]) => (
-          <li
-            key={key}
-            className="flex items-center justify-between gap-3 rounded-lg border border-border px-3.5 py-2.5"
-          >
+          <li key={key} className="flex items-center justify-between gap-3 rounded-lg border border-border px-3.5 py-2.5">
             <span className="text-[13px] font-medium text-foreground">{labelise(key)}</span>
-            <a
-              href={String(url)}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-[12.5px] font-semibold text-accent underline-offset-4 hover:underline"
-            >
+            <a href={String(url)} target="_blank" rel="noopener noreferrer" className="text-[12.5px] font-semibold text-accent underline-offset-4 hover:underline">
               Open
             </a>
           </li>
         ))}
       </ul>
-    </div>
-  )
-}
-
-function History({ row }: { row: SubmissionRow }) {
-  return (
-    <div>
-      <SectionLabel>History</SectionLabel>
-      {row.comments?.length ? (
-        <ol className="space-y-3">
-          {row.comments
-            .slice()
-            .reverse()
-            .map((entry, i) => (
-              <li key={i} className="border-l-2 border-border pl-3.5">
-                <p className="text-[13px] font-semibold text-foreground">{entry.action}</p>
-                <p className="text-[11.5px] text-muted-foreground">
-                  {formatDateTime(entry.timestamp)}
-                </p>
-                {entry.text && entry.text !== entry.action ? (
-                  <p className="mt-1 text-[13px] text-muted-foreground">{entry.text}</p>
-                ) : null}
-              </li>
-            ))}
-        </ol>
-      ) : (
-        <p className="text-[13px] text-muted-foreground">
-          Nothing recorded yet. Your decision will be the first entry.
-        </p>
-      )}
     </div>
   )
 }

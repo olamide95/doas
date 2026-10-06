@@ -1,0 +1,81 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function staffPath() { return /databases/$(database)/documents/staff/$(request.auth.uid); }
+    function isStaff() { return signedIn() && exists(staffPath()) && get(staffPath()).data.active != false; }
+    function isDirector() { return isStaff() && get(staffPath()).data.department == 'Director'; }
+    // Public tracker lookups are single-document queries by reference.
+    function publicLookup() { return request.query.limit <= 1; }
+
+    // Staff records are written only by /api/staff (Admin SDK bypasses rules).
+    match /staff/{uid} {
+      allow read: if isStaff() || (signedIn() && request.auth.uid == uid);
+      allow write: if false;
+    }
+
+    function submissionRules() { return true; }
+
+    match /firstPartySubmissions/{id} {
+      allow get: if isStaff();
+      allow list: if isStaff() || publicLookup();
+      allow create: if request.resource.data.status == 'With CSU' && request.resource.data.department == 'CSU';
+      allow update: if isStaff()
+        // Applicant editing a file that is still with CSU or was returned for changes
+        || (resource.data.status in ['With CSU', 'Changes Requested', 'Pending', 'Under Review']
+            && request.resource.data.status == 'With CSU'
+            && request.resource.data.department == 'CSU')
+        // Applicant declaring a payment — only payment.declared, comments and updatedAt may change
+        || (resource.data.status in ['Awaiting Payment', 'Part Payment — Balance Due', 'Billed']
+            && request.resource.data.status == resource.data.status
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['payment', 'comments', 'updatedAt'])
+            && request.resource.data.get('payment', {}).diff(resource.data.get('payment', {})).affectedKeys().hasOnly(['declared']));
+      allow delete: if isDirector();
+    }
+
+    match /thirdPartySubmissions/{id} {
+      allow get: if isStaff();
+      allow list: if isStaff() || publicLookup();
+      allow create: if request.resource.data.status == 'With CSU' && request.resource.data.department == 'CSU';
+      allow update: if isStaff()
+        || (resource.data.status in ['With CSU', 'Changes Requested', 'Pending', 'Under Review']
+            && request.resource.data.status == 'With CSU'
+            && request.resource.data.department == 'CSU')
+        || (resource.data.status in ['Awaiting Payment', 'Part Payment — Balance Due', 'Billed']
+            && request.resource.data.status == resource.data.status
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['payment', 'comments', 'updatedAt'])
+            && request.resource.data.get('payment', {}).diff(resource.data.get('payment', {})).affectedKeys().hasOnly(['declared']));
+      allow delete: if isDirector();
+    }
+
+    match /meetingRequests/{id} {
+      allow get: if isStaff();
+      allow list: if isStaff() || publicLookup();
+      allow create: if request.resource.data.status == 'pending';
+      allow update, delete: if isStaff();
+    }
+
+    // Public forms notify CSU and Finance; only staff read them.
+    match /notifications/{id} {
+      allow create: if true;
+      allow read, update: if isStaff();
+      allow delete: if isDirector();
+    }
+
+    match /activityLogs/{id} {
+      allow read, create: if isStaff();
+      allow update, delete: if false;
+    }
+
+    match /permitRegister/{id} { allow read, write: if isStaff(); }
+    match /tariffSchedules/{id} { allow read, write: if isStaff(); }
+    match /complianceIssues/{id} { allow read, write: if isStaff(); }
+    match /tasks/{id} { allow read, write: if isStaff(); }
+    match /practitioners/{id} { allow read, write: if isStaff(); }
+    match /chats/{room}/messages/{id} { allow read, write: if isStaff(); }
+
+    // Everything else is closed.
+    match /{document=**} { allow read, write: if false; }
+  }
+}

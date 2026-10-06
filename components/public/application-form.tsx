@@ -2,38 +2,20 @@
 
 import * as React from "react"
 import { useRouter, useSearchParams } from "next/navigation"
-import {
-  addDoc,
-  collection,
-  doc,
-  serverTimestamp,
-  updateDoc,
-} from "firebase/firestore"
+import { addDoc, arrayUnion, collection, doc, serverTimestamp, updateDoc } from "firebase/firestore"
 import { getDownloadURL, ref, uploadBytes } from "firebase/storage"
-import {
-  AlertTriangle,
-  ChevronLeft,
-  ChevronRight,
-  FileText,
-  Loader2,
-  Paperclip,
-  Send,
-} from "lucide-react"
+import { AlertTriangle, ChevronLeft, ChevronRight, FileText, Loader2, Paperclip, Send } from "lucide-react"
 import { COL, db, storage } from "@/lib/firebase"
-import { DEPARTMENT, STATUS } from "@/lib/workflow"
+import { AREA_COUNCILS, DEPARTMENT, STATUS } from "@/lib/workflow"
+import { SIGN_TYPES, STRUCTURE_TYPES } from "@/lib/tariff"
 import { findSubmission, isEditable } from "@/lib/applicant"
 import { toast } from "@/components/ui/toast"
-import {
-  ActionButton,
-  FieldGrid,
-  SelectField,
-  TextField,
-  TextareaField,
-} from "@/components/dashboard/form-kit"
+import { ActionButton, FieldGrid, SelectField, TextField, TextareaField } from "@/components/dashboard/form-kit"
 import { Panel, StatusPill } from "@/components/dashboard/kit"
 import { cn } from "@/lib/utils"
 
 type FieldKind = "text" | "tel" | "email" | "number" | "select" | "textarea"
+type Check = "email" | "ngPhone" | "cac" | "tin" | "positiveInt"
 
 interface FieldDef {
   name: string
@@ -42,15 +24,17 @@ interface FieldDef {
   required?: boolean
   placeholder?: string
   hint?: string
-  options?: string[]
+  options?: { value: string; label: string }[]
   span?: boolean
   mono?: boolean
+  check?: Check
 }
 
 interface DocDef {
   name: string
   label: string
   accept: string
+  required?: boolean
 }
 
 export interface FormStep {
@@ -60,42 +44,34 @@ export interface FormStep {
   documents?: DocDef[]
 }
 
-const PURPOSES = ["New Sign", "Upgrading of Existing Sign", "Change of Existing Sign"]
-const APPLICATION_TYPES = ["Billboard", "Gantry", "Unipole", "Wall Drape", "Roof Sign"]
-const SIGN_TYPES = ["Static", "Digital", "LED", "Scrolling"]
-const DURATIONS = ["Temporary", "Permanent"]
+const opts = (list: string[]) => list.map((v) => ({ value: v, label: v }))
 
-const APPLICANT_FIELDS: FieldDef[] = [
-  { name: "applicantName", label: "Applicant name", kind: "text", required: true },
-  { name: "contactPhoneNumber", label: "Phone number", kind: "tel", required: true, placeholder: "+234 800 000 0000" },
-  { name: "email", label: "Email address", kind: "email", required: true },
-  { name: "addressLine1", label: "Address", kind: "text", required: true },
-  { name: "addressLine2", label: "Address line 2", kind: "text", span: true },
-]
+const CHECKS: Record<Check, { test: (v: string) => boolean; message: string }> = {
+  email: { test: (v) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v), message: "Enter a valid email address" },
+  ngPhone: { test: (v) => /^(\+?234|0)[789][01]\d{8}$/.test(v.replace(/[\s-]/g, "")), message: "Use a Nigerian number, e.g. 0803 000 0000 or +234 803 000 0000" },
+  cac: { test: (v) => /^(RC|BN)-?\d{4,8}$/i.test(v.trim()), message: "Format RC-XXXXXX or BN-XXXXXX" },
+  tin: { test: (v) => /^\d{10,12}$/.test(v.replace(/[\s-]/g, "")), message: "TIN is 10–12 digits" },
+  positiveInt: { test: (v) => /^\d+$/.test(v) && Number(v) > 0, message: "Enter a whole number above zero" },
+}
 
-const SIGNAGE_FIELDS: FieldDef[] = [
-  { name: "purposeOfApplication", label: "Purpose", kind: "select", required: true, options: PURPOSES },
-  { name: "applicationType", label: "Structure type", kind: "select", required: true, options: APPLICATION_TYPES },
-  {
-    name: "gpsCoordinates",
-    label: "GPS coordinates",
-    kind: "text",
-    required: true,
-    mono: true,
-    placeholder: "9.0765, 7.3986",
-    hint: "Latitude, longitude. Take this standing at the site.",
-  },
-  { name: "structureDuration", label: "Duration", kind: "select", required: true, options: DURATIONS },
-  { name: "numberOfSigns", label: "Number of signs", kind: "number", required: true },
-  { name: "typeOfSign", label: "Type of sign", kind: "select", required: true, options: SIGN_TYPES },
-  { name: "signDimensions", label: "Sign dimensions", kind: "text", required: true, placeholder: "4m × 6m" },
-  { name: "structuralHeight", label: "Structural height", kind: "text", required: true, placeholder: "Metres above ground" },
-]
-
-const COMPANY_FIELDS: FieldDef[] = [
+const ORGANISATION_FIELDS: FieldDef[] = [
   { name: "companyName", label: "Company name", kind: "text", required: true },
-  { name: "companyRegistrationNumber", label: "CAC registration number", kind: "text", required: true, placeholder: "RC-123456" },
-  { name: "companyAddress", label: "Company address", kind: "textarea", required: true, span: true },
+  { name: "cacRegistrationNumber", label: "CAC registration number", kind: "text", required: true, mono: true, placeholder: "RC-123456", check: "cac" },
+  { name: "tin", label: "Tax identification number (TIN)", kind: "text", required: true, mono: true, placeholder: "10–12 digits", check: "tin" },
+  { name: "corporateAddress", label: "Corporate address", kind: "textarea", required: true, span: true },
+  { name: "primaryContactName", label: "Primary contact name", kind: "text", required: true },
+  { name: "primaryContactPhone", label: "Primary contact phone", kind: "tel", required: true, placeholder: "0803 000 0000", check: "ngPhone" },
+  { name: "primaryContactEmail", label: "Primary contact email", kind: "email", required: true, check: "email" },
+]
+
+const SITE_FIELDS = (route: "first" | "third"): FieldDef[] => [
+  { name: "signageSiteAddress", label: "Signage site address", kind: "textarea", required: true, span: true },
+  { name: "areaCouncil", label: "Area council", kind: "select", required: true, options: opts(AREA_COUNCILS) },
+  { name: "gpsCoordinates", label: "GPS coordinates", kind: "text", mono: true, placeholder: "9.0765, 7.3986", hint: "Optional. The inspecting officer records exact coordinates on site." },
+  { name: "purposeOfApplication", label: "Purpose", kind: "select", required: true, options: opts(["New Sign", "Upgrading of Existing Sign", "Change of Existing Sign"]) },
+  { name: "applicationType", label: route === "first" ? "Main sign type" : "Structure type", kind: "select", required: true, options: route === "first" ? SIGN_TYPES : STRUCTURE_TYPES },
+  { name: "numberOfSigns", label: "Number of signs", kind: "number", required: true, check: "positiveInt" },
+  { name: "signDimensions", label: "Declared dimensions", kind: "text", required: true, placeholder: "4m × 6m", hint: "Verified and locked by the field desk." },
 ]
 
 const PRACTITIONER_FIELDS: FieldDef[] = [
@@ -104,49 +80,37 @@ const PRACTITIONER_FIELDS: FieldDef[] = [
 ]
 
 const COMMON_DOCS: DocDef[] = [
-  { name: "eiaReport", label: "Environmental Impact Assessment", accept: ".pdf,.doc,.docx" },
-  { name: "soilTestReport", label: "Soil test report", accept: ".pdf,.doc,.docx" },
-  { name: "proofOfPayment", label: "Proof of application fee", accept: ".pdf,.jpg,.jpeg,.png" },
-  { name: "structuralEngineeringDrawings", label: "Structural engineering drawings", accept: ".pdf,.dwg,.dxf" },
-]
-
-const THIRD_PARTY_DOCS: DocDef[] = [
-  ...COMMON_DOCS,
-  { name: "practitionerLicense", label: "Practitioner licence", accept: ".pdf,.jpg,.jpeg,.png" },
-  { name: "companyRegistration", label: "CAC certificate", accept: ".pdf,.jpg,.jpeg,.png" },
+  { name: "cacCertificate", label: "CAC certificate (PDF)", accept: ".pdf", required: true },
+  { name: "applicationLetter", label: "Application letter (PDF)", accept: ".pdf", required: true },
+  { name: "siteLayoutPlan", label: "Site layout plan (PDF or JPEG)", accept: ".pdf,.jpg,.jpeg", required: true },
 ]
 
 export const FIRST_PARTY_STEPS: FormStep[] = [
-  { id: "applicant", title: "About you", fields: APPLICANT_FIELDS },
-  { id: "signage", title: "The signage", fields: SIGNAGE_FIELDS },
+  { id: "organisation", title: "Organisation", fields: ORGANISATION_FIELDS },
+  { id: "site", title: "Signage site", fields: SITE_FIELDS("first") },
   { id: "documents", title: "Documents", documents: COMMON_DOCS },
 ]
 
 export const THIRD_PARTY_STEPS: FormStep[] = [
-  { id: "applicant", title: "About the client", fields: APPLICANT_FIELDS },
-  { id: "signage", title: "The signage", fields: SIGNAGE_FIELDS },
-  { id: "company", title: "Company", fields: COMPANY_FIELDS },
+  { id: "organisation", title: "Client organisation", fields: ORGANISATION_FIELDS },
+  { id: "site", title: "Billboard site", fields: SITE_FIELDS("third") },
   { id: "practitioner", title: "Practitioner", fields: PRACTITIONER_FIELDS },
-  { id: "documents", title: "Documents", documents: THIRD_PARTY_DOCS },
+  {
+    id: "documents",
+    title: "Documents",
+    documents: [
+      ...COMMON_DOCS,
+      { name: "practitionerLicense", label: "Practitioner licence", accept: ".pdf,.jpg,.jpeg,.png", required: true },
+      { name: "structuralDrawings", label: "Structural drawings (optional)", accept: ".pdf,.dwg,.dxf" },
+    ],
+  },
 ]
 
 function reference(route: "first" | "third") {
-  const prefix = route === "first" ? "FP" : "TP"
-  const tail = Math.random().toString(36).slice(2, 8).toUpperCase()
-  return `${prefix}-${Date.now()}-${tail}`
+  return `${route === "first" ? "FP" : "TP"}-${Date.now()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`
 }
 
-export function ApplicationForm({
-  route,
-  steps,
-  title,
-  intro,
-}: {
-  route: "first" | "third"
-  steps: FormStep[]
-  title: string
-  intro: string
-}) {
+export function ApplicationForm({ route, steps, title, intro }: { route: "first" | "third"; steps: FormStep[]; title: string; intro: string }) {
   const router = useRouter()
   const params = useSearchParams()
   const editingRef = params.get("id")
@@ -160,43 +124,27 @@ export function ApplicationForm({
   const [submitting, setSubmitting] = React.useState(false)
   const [errors, setErrors] = React.useState<Record<string, string>>({})
 
-  const allFields = React.useMemo(
-    () => steps.flatMap((step) => step.fields ?? []),
-    [steps],
-  )
+  const allFields = React.useMemo(() => steps.flatMap((s) => s.fields ?? []), [steps])
 
-  // ---- Edit mode: pull the existing application in -------------------
   React.useEffect(() => {
     if (!editingRef) return
     let cancelled = false
-
     findSubmission(editingRef)
       .then((found) => {
         if (cancelled) return
         if (!found) {
-          toast.error({
-            title: "Application not found",
-            description: `No application matches ${editingRef}. Check the reference and try again.`,
-          })
+          toast.error({ title: "Application not found", description: `No application matches ${editingRef}.` })
           setLoading(false)
           return
         }
-
         if (!isEditable(found.data.status)) {
-          toast.warning({
-            title: "This application can't be edited",
-            description: "It has already moved past the point where changes are accepted.",
-            duration: 8000,
-          })
+          toast.warning({ title: "This application can't be edited", description: "It has moved past screening." })
           router.push(`/submission-status?id=${editingRef}`)
           return
         }
-
         setExisting(found)
         const loaded: Record<string, string> = {}
-        allFields.forEach((field) => {
-          loaded[field.name] = found.data[field.name] ?? ""
-        })
+        allFields.forEach((f) => (loaded[f.name] = String(found.data[f.name] ?? "")))
         setValues(loaded)
         setExistingUrls(found.data.files ?? {})
         setLoading(false)
@@ -204,7 +152,6 @@ export function ApplicationForm({
       .catch(() => {
         if (!cancelled) setLoading(false)
       })
-
     return () => {
       cancelled = true
     }
@@ -223,20 +170,17 @@ export function ApplicationForm({
 
   const validateStep = (index: number) => {
     const found: Record<string, string> = {}
-    ;(steps[index].fields ?? []).forEach((field) => {
-      const value = (values[field.name] ?? "").trim()
-      if (field.required && !value) found[field.name] = "Required"
-      else if (field.kind === "email" && value && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(value))
-        found[field.name] = "Enter a valid email address"
-      else if (field.kind === "tel" && value && value.replace(/\D/g, "").length < 10)
-        found[field.name] = "Enter a valid phone number"
+    ;(steps[index].fields ?? []).forEach((f) => {
+      const v = (values[f.name] ?? "").trim()
+      if (f.required && !v) found[f.name] = "Required"
+      else if (v && f.check && !CHECKS[f.check].test(v)) found[f.name] = CHECKS[f.check].message
+    })
+    ;(steps[index].documents ?? []).forEach((d) => {
+      if (d.required && !files[d.name] && !existingUrls[d.name]) found[d.name] = "This document is required"
     })
     setErrors(found)
     if (Object.keys(found).length) {
-      toast.warning({
-        title: "Some fields need attention",
-        description: "The highlighted fields have to be filled in before you continue.",
-      })
+      toast.warning({ title: "Some fields need attention", description: "Fix the highlighted items before continuing." })
       return false
     }
     return true
@@ -244,16 +188,12 @@ export function ApplicationForm({
 
   const uploadDocs = async (submissionRef: string) => {
     const urls: Record<string, string> = { ...existingUrls }
-    const pending = Object.entries(files).filter(([, file]) => file)
-
-    for (const [key, file] of pending) {
+    for (const [key, file] of Object.entries(files)) {
       if (!file) continue
-      const path = `submissions/${submissionRef}/${key}-${file.name.replace(/\s+/g, "-")}`
-      const target = ref(storage, path)
+      const target = ref(storage, `submissions/${submissionRef}/${key}-${file.name.replace(/\s+/g, "-")}`)
       await uploadBytes(target, file, { contentType: file.type })
       urls[key] = await getDownloadURL(target)
     }
-
     return urls
   }
 
@@ -264,20 +204,28 @@ export function ApplicationForm({
         return
       }
     }
-
     setSubmitting(true)
     const submissionId = existing?.data.submissionId ?? reference(route)
     const now = new Date().toISOString()
 
     try {
       const fileUrls = await uploadDocs(submissionId)
-
+      const clean = Object.fromEntries(Object.entries(values).map(([k, v]) => [k, v.trim()]))
+      const cac = (clean.cacRegistrationNumber ?? "").toUpperCase()
       const payload: Record<string, unknown> = {
-        ...values,
+        ...clean,
+        cacRegistrationNumber: cac,
+        tin: (clean.tin ?? "").replace(/\D/g, ""),
+        applicantType: route === "first" ? "First-Party" : "Third-Party Agency",
+        // Legacy aliases — the register, search and notifications read these.
+        applicantName: clean.companyName,
+        email: clean.primaryContactEmail,
+        contactPhoneNumber: clean.primaryContactPhone,
+        addressLine1: clean.signageSiteAddress,
+        companyAddress: clean.corporateAddress,
+        companyRegistrationNumber: cac,
         submissionId,
         isFirstParty: route === "first",
-        // Both routes start with CSU. Resubmitting after a change request
-        // sends it back to CSU to be screened again, not straight upward.
         status: STATUS.withCsu,
         department: DEPARTMENT.csu,
         files: fileUrls,
@@ -285,44 +233,33 @@ export function ApplicationForm({
       }
 
       if (existing) {
-        // Never overwrite the original filing date on an edit.
         await updateDoc(doc(db, existing.collectionName, existing.docId), {
           ...payload,
           directorReason: "",
           resubmittedAt: now,
+          comments: arrayUnion({ timestamp: now, desk: "applicant", action: "Updated and resubmitted by applicant", to: DEPARTMENT.csu, status: STATUS.withCsu }),
         })
       } else {
         await addDoc(collection(db, route === "first" ? COL.firstParty : COL.thirdParty), {
           ...payload,
           createdAt: serverTimestamp(),
+          comments: [{ timestamp: now, desk: "applicant", action: "File opened via portal upload", to: DEPARTMENT.csu, status: STATUS.withCsu }],
         })
       }
 
-      // The old forms notified "csu_department" and "director_office". No
-      // dashboard listens on those, so nobody was ever told.
       await addDoc(collection(db, COL.notifications), {
         userId: "csu",
-        content: existing
-          ? `${values.applicantName} has updated application ${submissionId}`
-          : `New ${route === "first" ? "first-party" : "third-party"} application from ${values.applicantName}`,
+        content: existing ? `${clean.companyName} has updated application ${submissionId}` : `New ${route === "first" ? "first-party" : "third-party"} application from ${clean.companyName}`,
         type: "submission",
         referenceId: submissionId,
         isRead: false,
         createdAt: now,
       })
 
-      toast.success({
-        title: existing ? "Application updated" : "Application submitted",
-        description: `Keep your reference: ${submissionId}`,
-        duration: 9000,
-      })
-
+      toast.success({ title: existing ? "Application updated" : "Application submitted", description: `Keep your reference: ${submissionId}`, duration: 9000 })
       router.push(`/submission-status?id=${submissionId}`)
     } catch (err) {
-      toast.error({
-        title: "Submission failed",
-        description: err instanceof Error ? err.message : "Check your connection and try again.",
-      })
+      toast.error({ title: "Submission failed", description: err instanceof Error ? err.message : "Check your connection and try again." })
     } finally {
       setSubmitting(false)
     }
@@ -343,12 +280,8 @@ export function ApplicationForm({
     <div className="min-h-screen bg-background py-8">
       <div className="mx-auto w-full max-w-3xl px-4">
         <header className="mb-6">
-          <h1 className="font-display text-[26px] font-semibold text-foreground sm:text-[30px]">
-            {title}
-          </h1>
-          <p className="mt-1 max-w-[62ch] text-[13.5px] leading-relaxed text-muted-foreground">
-            {intro}
-          </p>
+          <h1 className="font-display text-[26px] font-semibold text-foreground sm:text-[30px]">{title}</h1>
+          <p className="mt-1 max-w-[62ch] text-[13.5px] leading-relaxed text-muted-foreground">{intro}</p>
         </header>
 
         {existing ? (
@@ -357,25 +290,15 @@ export function ApplicationForm({
               <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-[hsl(var(--state-wait))]" />
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
-                  <p className="text-[13.5px] font-semibold text-foreground">
-                    Editing {existing.data.submissionId}
-                  </p>
+                  <p className="text-[13.5px] font-semibold text-foreground">Editing {existing.data.submissionId}</p>
                   <StatusPill status={existing.data.status} />
                 </div>
                 {existing.data.directorReason ? (
-                  <>
-                    <p className="mt-2 text-[12.5px] font-semibold text-foreground">
-                      What you were asked to change
-                    </p>
-                    <p className="mt-0.5 text-[13px] leading-relaxed text-foreground">
-                      {existing.data.directorReason}
-                    </p>
-                  </>
+                  <p className="mt-2 text-[13px] leading-relaxed text-foreground">
+                    <span className="font-semibold">What to change: </span>
+                    {existing.data.directorReason}
+                  </p>
                 ) : null}
-                <p className="mt-2 text-[12.5px] text-muted-foreground">
-                  Your answers are loaded below. Change what you need to and resubmit — documents you
-                  already uploaded stay unless you replace them.
-                </p>
               </div>
             </div>
           </div>
@@ -384,30 +307,9 @@ export function ApplicationForm({
         <ol className="mb-5 flex items-stretch gap-1">
           {steps.map((entry, index) => (
             <li key={entry.id} className="min-w-0 flex-1">
-              <button
-                type="button"
-                onClick={() => index < stepIndex && setStepIndex(index)}
-                className="w-full text-left"
-                disabled={index > stepIndex}
-              >
-                <span
-                  className={cn(
-                    "block h-1 rounded-full transition-colors",
-                    index < stepIndex
-                      ? "bg-[hsl(var(--state-clear))]"
-                      : index === stepIndex
-                        ? "bg-[hsl(var(--state-wait))]"
-                        : "bg-border",
-                  )}
-                />
-                <span
-                  className={cn(
-                    "mt-1.5 block truncate text-[11px]",
-                    index === stepIndex ? "font-semibold text-foreground" : "text-muted-foreground",
-                  )}
-                >
-                  {entry.title}
-                </span>
+              <button type="button" onClick={() => index < stepIndex && setStepIndex(index)} className="w-full text-left" disabled={index > stepIndex}>
+                <span className={cn("block h-1 rounded-full", index < stepIndex ? "bg-[hsl(var(--state-clear))]" : index === stepIndex ? "bg-[hsl(var(--state-wait))]" : "bg-border")} />
+                <span className={cn("mt-1.5 block truncate text-[11px]", index === stepIndex ? "font-semibold text-foreground" : "text-muted-foreground")}>{entry.title}</span>
               </button>
             </li>
           ))}
@@ -416,116 +318,71 @@ export function ApplicationForm({
         <Panel title={step.title} bodyClassName="p-4 sm:p-5">
           {step.fields ? (
             <FieldGrid>
-              {step.fields.map((field) => (
-                <div key={field.name} className={cn(field.span && "sm:col-span-2")}>
-                  {field.kind === "select" ? (
-                    <SelectField
-                      id={field.name}
-                      label={field.required ? `${field.label} *` : field.label}
-                      value={values[field.name] ?? ""}
-                      onChange={(value) => set(field.name, value)}
-                      hint={errors[field.name] ?? field.hint}
-                      options={(field.options ?? []).map((option) => ({
-                        value: option,
-                        label: option,
-                      }))}
-                    />
-                  ) : field.kind === "textarea" ? (
-                    <TextareaField
-                      id={field.name}
-                      label={field.required ? `${field.label} *` : field.label}
-                      value={values[field.name] ?? ""}
-                      onChange={(value) => set(field.name, value)}
-                      hint={errors[field.name] ?? field.hint}
-                      placeholder={field.placeholder}
-                      span={false}
-                    />
-                  ) : (
-                    <TextField
-                      id={field.name}
-                      label={field.required ? `${field.label} *` : field.label}
-                      type={field.kind === "number" ? "text" : (field.kind as "text" | "email" | "tel")}
-                      value={values[field.name] ?? ""}
-                      onChange={(value) => set(field.name, value)}
-                      hint={errors[field.name] ?? field.hint}
-                      placeholder={field.placeholder}
-                      mono={field.mono}
-                    />
-                  )}
-                  {errors[field.name] ? (
-                    <p className="mt-1 text-[11.5px] font-medium text-[hsl(var(--state-stop))]">
-                      {errors[field.name]}
-                    </p>
-                  ) : null}
-                </div>
-              ))}
+              {step.fields.map((f) => {
+                const label = f.required ? `${f.label} *` : f.label
+                const value = values[f.name] ?? ""
+                return (
+                  <div key={f.name} className={cn(f.span && "sm:col-span-2")}>
+                    {f.kind === "select" ? (
+                      <SelectField id={f.name} label={label} value={value} onChange={(v) => set(f.name, v)} hint={f.hint} options={f.options ?? []} />
+                    ) : f.kind === "textarea" ? (
+                      <TextareaField id={f.name} label={label} value={value} onChange={(v) => set(f.name, v)} hint={f.hint} placeholder={f.placeholder} span={false} />
+                    ) : (
+                      <TextField
+                        id={f.name}
+                        label={label}
+                        type={f.kind === "number" ? "text" : (f.kind as "text" | "email" | "tel")}
+                        value={value}
+                        onChange={(v) => set(f.name, v)}
+                        hint={f.hint}
+                        placeholder={f.placeholder}
+                        mono={f.mono}
+                      />
+                    )}
+                    {errors[f.name] ? <p className="mt-1 text-[11.5px] font-medium text-[hsl(var(--state-stop))]">{errors[f.name]}</p> : null}
+                  </div>
+                )
+              })}
             </FieldGrid>
           ) : null}
 
           {step.documents ? (
             <div className="space-y-3">
-              <p className="text-[13px] leading-relaxed text-muted-foreground">
-                PDF, Word or image files, up to 10 MB each.
-              </p>
-              {step.documents.map((docDef) => {
-                const picked = files[docDef.name]
-                const already = existingUrls[docDef.name]
+              <p className="text-[13px] text-muted-foreground">Up to 10 MB each. Items marked * are required.</p>
+              {step.documents.map((d) => {
+                const picked = files[d.name]
+                const already = existingUrls[d.name]
                 return (
-                  <div
-                    key={docDef.name}
-                    className="flex flex-col gap-2 rounded-lg border border-border px-3.5 py-3 sm:flex-row sm:items-center sm:justify-between"
-                  >
-                    <div className="min-w-0">
-                      <label
-                        htmlFor={docDef.name}
-                        className="text-[13.5px] font-medium text-foreground"
-                      >
-                        {docDef.label}
+                  <div key={d.name}>
+                    <div className="flex flex-col gap-2 rounded-lg border border-border px-3.5 py-3 sm:flex-row sm:items-center sm:justify-between">
+                      <div className="min-w-0">
+                        <label htmlFor={d.name} className="text-[13.5px] font-medium text-foreground">
+                          {d.label}
+                          {d.required ? " *" : ""}
+                        </label>
+                        <p className="mt-0.5 text-[12px] text-muted-foreground">{picked ? `${picked.name} · ready to upload` : already ? "Already uploaded" : "Not uploaded yet"}</p>
+                      </div>
+                      <label htmlFor={d.name} className="inline-flex shrink-0 cursor-pointer items-center gap-1.5 rounded-lg border border-border px-2.5 py-1.5 text-[12.5px] font-semibold hover:bg-muted">
+                        <Paperclip className="h-3.5 w-3.5" />
+                        {already || picked ? "Replace" : "Choose file"}
+                        <input
+                          id={d.name}
+                          type="file"
+                          accept={d.accept}
+                          className="hidden"
+                          onChange={(e) => {
+                            const file = e.target.files?.[0] ?? null
+                            if (file && file.size > 10 * 1024 * 1024) {
+                              toast.warning({ title: "File too large", description: `${file.name} is over 10 MB.` })
+                              return
+                            }
+                            setFiles((prev) => ({ ...prev, [d.name]: file }))
+                            setErrors((prev) => ({ ...prev, [d.name]: "" }))
+                          }}
+                        />
                       </label>
-                      {picked ? (
-                        <p className="mt-0.5 text-[12px] text-[hsl(var(--state-clear))]">
-                          {picked.name} · ready to upload
-                        </p>
-                      ) : already ? (
-                        <p className="mt-0.5 text-[12px] text-muted-foreground">
-                          Already uploaded ·{" "}
-                          <a
-                            href={already}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="font-semibold text-accent underline-offset-4 hover:underline"
-                          >
-                            view
-                          </a>
-                        </p>
-                      ) : (
-                        <p className="mt-0.5 text-[12px] text-muted-foreground">Not uploaded yet</p>
-                      )}
                     </div>
-                    <label
-                      htmlFor={docDef.name}
-                      className="inline-flex shrink-0 cursor-pointer items-center gap-1.5 rounded-lg border border-border px-2.5 py-1.5 text-[12.5px] font-semibold transition-colors hover:bg-muted"
-                    >
-                      <Paperclip className="h-3.5 w-3.5" />
-                      {already || picked ? "Replace" : "Choose file"}
-                      <input
-                        id={docDef.name}
-                        type="file"
-                        accept={docDef.accept}
-                        className="hidden"
-                        onChange={(event) => {
-                          const file = event.target.files?.[0] ?? null
-                          if (file && file.size > 10 * 1024 * 1024) {
-                            toast.warning({
-                              title: "File too large",
-                              description: `${file.name} is over 10 MB.`,
-                            })
-                            return
-                          }
-                          setFiles((prev) => ({ ...prev, [docDef.name]: file }))
-                        }}
-                      />
-                    </label>
+                    {errors[d.name] ? <p className="mt-1 text-[11.5px] font-medium text-[hsl(var(--state-stop))]">{errors[d.name]}</p> : null}
                   </div>
                 )
               })}
@@ -533,22 +390,12 @@ export function ApplicationForm({
           ) : null}
 
           <div className="mt-6 flex items-center justify-between gap-2 border-t border-border pt-4">
-            <ActionButton
-              tone="quiet"
-              icon={ChevronLeft}
-              disabled={stepIndex === 0}
-              onClick={() => setStepIndex((i) => Math.max(0, i - 1))}
-            >
+            <ActionButton tone="quiet" icon={ChevronLeft} disabled={stepIndex === 0} onClick={() => setStepIndex((i) => Math.max(0, i - 1))}>
               Back
             </ActionButton>
-
             {last ? (
               <ActionButton icon={submitting ? Loader2 : Send} disabled={submitting} onClick={submit}>
-                {submitting
-                  ? "Submitting…"
-                  : existing
-                    ? "Resubmit application"
-                    : "Submit application"}
+                {submitting ? "Submitting…" : existing ? "Resubmit application" : "Submit application"}
               </ActionButton>
             ) : (
               <ActionButton
@@ -565,8 +412,7 @@ export function ApplicationForm({
 
         <p className="mt-4 flex items-start gap-2 text-[12.5px] leading-relaxed text-muted-foreground">
           <FileText className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-          You'll get a reference number when you submit. Keep it — it's how you check progress and
-          make changes later.
+          You&rsquo;ll get a reference number when you submit. It&rsquo;s how you track progress, pay and renew.
         </p>
       </div>
     </div>

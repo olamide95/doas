@@ -4,29 +4,34 @@ import { getAuth } from "firebase/auth"
 import { getStorage } from "firebase/storage"
 
 /**
- * Config comes from .env.local so it isn't hard-coded in the repo:
- *
- * NEXT_PUBLIC_FIREBASE_API_KEY=...
- * NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=doas-771c4.firebaseapp.com
- * NEXT_PUBLIC_FIREBASE_PROJECT_ID=doas-771c4
- * NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET=doas-771c4.firebasestorage.app
- * NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID=...
- * NEXT_PUBLIC_FIREBASE_APP_ID=...
- * NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID=...
- *
- * A web API key is not a secret — it identifies the project, it doesn't grant
- * access. What actually protects your data is Firestore + Storage security
- * rules, so make sure those are locked to authenticated staff before launch.
+ * Web config comes from .env.local (and the hosting provider's env settings).
+ * Each variable is referenced literally so Next.js can inline it at build time —
+ * don't refactor these into a loop or dynamic lookup.
  */
 const firebaseConfig = {
-  apiKey: "AIzaSyA3R15_tAiapTQcKc_6cL8nN_FPoWRDFI0",
-  authDomain: "doas-771c4.firebaseapp.com",
-  projectId: "doas-771c4",
-  storageBucket: "doas-771c4.firebasestorage.app",
-  messagingSenderId: "376823252081",
-  appId: "1:376823252081:web:871302513d4da5fae107d0",
-  measurementId: "G-5RM0N8JG2W"
-};
+  apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
+  authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
+  projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
+  storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
+  appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
+  measurementId: process.env.NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID,
+}
+
+const REQUIRED: [keyof typeof firebaseConfig, string][] = [
+  ["apiKey", "NEXT_PUBLIC_FIREBASE_API_KEY"],
+  ["authDomain", "NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN"],
+  ["projectId", "NEXT_PUBLIC_FIREBASE_PROJECT_ID"],
+  ["storageBucket", "NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET"],
+  ["appId", "NEXT_PUBLIC_FIREBASE_APP_ID"],
+]
+
+const missing = REQUIRED.filter(([key]) => !firebaseConfig[key]).map(([, name]) => name)
+if (missing.length) {
+  throw new Error(
+    `Firebase config missing: ${missing.join(", ")}. Add them to .env.local (or your host's environment variables) and restart the server.`,
+  )
+}
 
 const app: FirebaseApp = getApps().length ? getApp() : initializeApp(firebaseConfig)
 
@@ -46,4 +51,7 @@ export const COL = {
   staff: "staff",
   activity: "activityLogs",
   chats: "chats",
+  register: "permitRegister",
+  tariffs: "tariffSchedules",
+  compliance: "complianceIssues",
 } as const

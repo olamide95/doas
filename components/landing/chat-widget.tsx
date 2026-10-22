@@ -1,90 +1,134 @@
 "use client"
 
 import { useEffect, useRef, useState } from "react"
+import Image from "next/image"
 import { MessageSquare, Send, Sparkles, X, Minus, BellRing } from "lucide-react"
-import { openNotify, type NotifyIntent } from "./notify-dialog"
+import { openNotify } from "./notify-dialog"
+import { CONTACT, DIRECTOR, type NotifyIntent } from "./content"
 
 type Msg = { id: number; from: "bot" | "user"; text: string; at: number; intent?: NotifyIntent }
 
 const QUICK = [
   "Where is your office?",
-  "How do I register a storefront sign?",
-  "Report an illegal billboard",
-  "What does a permit cost?",
+  "Can I build a new billboard now?",
+  "When do I pay the revalidation fee?",
+  "How far apart must billboards be?",
+  "Report an unsafe structure",
 ] as const
 
+const PHONES = `${CONTACT.phones[0].display} or ${CONTACT.phones[1].display}`
+
 const WELCOME =
-  "Hello, and welcome to DOAS. Ask me anything about signage permits, first-party regularization, or how to reach our office at Jahi."
+  "Hello, and welcome to DOAS. Ask me about current notices, billboard standards, revalidation, payments or how to reach the Customer Service Unit in Jahi."
 
 function stamp(t: number) {
   return new Date(t).toLocaleTimeString("en-NG", { hour: "2-digit", minute: "2-digit" })
 }
 
-/** Keyword router → institutional replies. Swap for a real model/API call later. */
+/** Keyword router → institutional replies. Order matters: specific topics first. Swap for a real model/API call later. */
 function answer(q: string): { text: string; intent?: NotifyIntent } {
   const s = q.toLowerCase()
 
-  if (/(where|office|address|located|headquarters|jahi|katampe|visit|open|hours)/.test(s))
+  if (/(stop.?work|construct|build|erect|excavat|foundation|new billboard|new structure)/.test(s))
     return {
-      text: "Our Head Office is at Katampe Road, Jahi, Abuja, FCT 900321, open Monday to Friday, 8:00am – 4:00pm. The Customer Service Unit is on +234 9 291 9181 or service@doas.abj.gov.ng.",
+      text: "A temporary stop-work order is in force. New billboard construction, excavation, foundation work and erection are suspended until further official direction, and no practitioner may start or continue structural work without express written clearance from DOAS. Flex replacement and critical safety maintenance on existing structures remain subject to DOAS requirements. An exemption must be written and site-specific — a request is not permission to proceed.",
+      intent: "site",
     }
 
-  if (/(storefront|shop|first.?party|regulari|register|my sign|business sign)/.test(s))
+  if (/(revalidat|certificat|licen[cs]e|successful list)/.test(s))
     return {
-      text: "A sign on your own premises is a First-Party signage and must be registered with DOAS. Online filing is being connected to the internal register and is not open to the public yet — for now, bring a photograph of the sign, its dimensions, your business registration and your address to the Jahi Head Office. Leave your email and we will write to you the day the online portal opens.",
-      intent: "first-party",
+      text: "The practitioner revalidation certification fee is ₦1,000,000 per successful practitioner (circular of 29 September 2026). It is payable only after DOAS publishes the successful list and notifies you in writing — not when you submit documents. Pay through Remita and submit your evidence for verification before the revalidated licence is issued. Site approval revalidation covered approvals issued January 2025 – August 2026, with submissions through the Customer Service Unit from 21 September to 4:00pm on 5 October 2026.",
+      intent: "revalidation",
     }
 
-  if (/(illegal|report|unapproved|unauthori|complain|demolish|remove|violation|banner)/.test(s))
+  if (/(newly approved|new site|pay for (my|a|the) site|site payment)/.test(s))
     return {
-      text: "Thank you for helping keep the FCT orderly. Send the location (street, landmark and area council), a photograph and any visible advertiser details to service@doas.abj.gov.ng, or call +234 9 291 9181. Monitoring & Enforcement will inspect and act in line with the Abuja Master Plan.",
+      text: "Do not pay for newly approved billboard sites until further notice. Approved bills and liabilities for existing or old structures are unaffected and remain payable.",
+      intent: "billing",
+    }
+
+  if (/(spacing|distance|how far|apart|metre|meter|junction|intersection|gantry|unipole|portrait|48 sheet|96 sheet|light ?box|eye catcher|flag ?pole)/.test(s))
+    return {
+      text: "Minimum spacing between new structures: 1 km for gantries, eye catchers and flag poles; 500 m for large format and unipoles; 400 m for 96 sheet and portrait; 200 m for light box and 48 sheet (existing portrait 200 m only where expressly permitted). A maximum of two alternating billboards is allowed at a junction. Meeting the minimum does not by itself mean a site is approved.",
+    }
+
+  if (/(tree|flower|walkway|bus stop|setback|environment|flex|skeleton|untidy|torn)/.test(s))
+    return {
+      text: "Billboards must not occupy flower beds or obstruct walkways, bus stops, roadside setbacks or public landscaping. Trees may not be cut, trimmed, damaged or felled for visibility without prior DOAS written clearance — Parks and Recreation approval alone is not enough. Every board must stay neatly flexed or covered, including between campaigns; naked, torn or skeleton boards are prohibited.",
+    }
+
+  if (/(high.?tension|power line|electric)/.test(s))
+    return {
+      text: "Billboards beneath high-tension electricity lines, or in a high-tension corridor, must be removed within 21 days of the applicable official notice. The deadline runs from the date of the notice served, not from any other date.",
       intent: "report",
     }
 
-  if (/(billboard|third.?party|led|hoarding|poster|practitioner|agency|unipole|gantry)/.test(s))
+  if (/(safety|ppe|hse|helmet|harness|installer|contractor)/.test(s))
     return {
-      text: "Billboards, LED screens, hoardings and posters on public or leased sites are Third-Party advertising, filed through a registered practitioner. Files pass through Monitoring & Enforcement and Planning & Development reports before the Director's approval. Online filing opens soon — leave your email for the practitioner application pack.",
-      intent: "third-party",
+      text: "All practitioners must follow the DOAS Health, Safety and Environment policy during installation, maintenance, flex replacement, campaign changes and dismantling. Use appropriate PPE, secure the work area, protect pedestrians and road users, and hold every required approval before work starts. Brief your installers and contractors on these requirements.",
     }
 
-  if (/(vehicle|mobile|haulage|truck|bus|car|branded|fleet)/.test(s))
+  if (/(consent|private property|setting.?out|site assessment|build permit)/.test(s))
     return {
-      text: "Vehicle branding and mobile advertising on trucks, buses and haulage fleets in the FCT require a DOAS mobile advert permit, listed by each vehicle's registration number. Leave your email and we will send the fleet schedule template and requirements.",
-      intent: "mobile",
+      text: "For a billboard in front of or around private property, obtain a valid consent letter from the owner or their authorised representative before you apply. A Setting Out Certificate and every other applicable written approval are required before any construction or maintenance, and a Site Assessment Certificate precedes a Site Build Permit.",
+      intent: "site",
     }
 
-  if (/(status|track|check|reference|my application|verify)/.test(s))
+  if (/(storefront|shop|first.?party|my sign|business sign|signage on)/.test(s))
     return {
-      text: "Online tracking by reference number is being connected to the internal register. In the meantime, quote your reference number to the Customer Service Unit on +234 9 291 9181 and the desk holding your file will be confirmed to you.",
-      intent: "status",
-    }
-
-  if (/(fee|cost|price|how much|pay|invoice|tariff|charge)/.test(s))
-    return {
-      text: "Fees depend on signage class, size and location, and are set out in the DOAS tariff schedule. For a first-party sign, Finance issues your invoice after the site visit; third-party sites are assessed individually. Never pay a fee that is not on a DOAS invoice.",
-    }
-
-  if (/(area council|amac|bwari|kuje|kwali|abaji|gwagwalada|double|mou|twice)/.test(s))
-    return {
-      text: "Under the Memorandum of Understanding with the six Area Councils — AMAC, Abaji, Bwari, Gwagwalada, Kuje and Kwali — DOAS is the single regulatory and collection point for outdoor advertising in the FCT. Revenue is shared with the councils by law, so you should not be billed twice for the same sign.",
-    }
-
-  if (/(demand letter|notice|sanction|penalt|deadline|court)/.test(s))
-    return {
-      text: "If you have received a demand letter, act within the period stated on it. Bring the letter, your business registration and a photograph of the sign to the Jahi Head Office. Signs regularized within the stated period are not subject to removal.",
+      text: "A sign on your own business premises is first-party signage. Businesses and approved first-party compliance facilitators confirm requirements and regularise signage through the Customer Service Unit in Jahi. Pay only against an official DOAS bill — never to an individual.",
       intent: "first-party",
     }
 
-  if (/(hello|hi|good (morning|afternoon|evening)|hey|greetings)/.test(s))
+  if (/(telecom|mast|tower|base station)/.test(s))
     return {
-      text: "Good day, and welcome. I can help with permits, first-party regularization, reporting unapproved structures, and finding our office. What would you like to know?",
+      text: "Telecom site documentation, inventory and administrative requirements are handled by the Telecom Team within its approved remit. Submit through the Customer Service Unit, or leave your email for the current requirements.",
+      intent: "telecom",
     }
 
-  if (/(thank|thanks|appreciate)/.test(s))
-    return { text: "You are welcome. DOAS is here to help you stay compliant. Is there anything else?" }
+  if (/(bill|invoice|receipt|reconcil|discrepan|remita|fee|cost|price|how much|pay|charge|tariff)/.test(s))
+    return {
+      text: "Pay only against an official DOAS bill. The published revalidation certification fee is ₦1,000,000 per successful practitioner, via Remita, after written notification. Payment for newly approved sites is suspended until further notice. For a bill query, bring the bill number, site reference, the amount in question and your evidence — Accounts will verify. A receipt never replaces an approval.",
+      intent: "billing",
+    }
+
+  if (/(illegal|report|unsafe|danger|complain|bribe|induce|extort|demand|intermediar|agent|tout|violation)/.test(s))
+    return {
+      text: `Thank you for helping keep the FCT safe. Send the exact location, a photograph and any visible advertiser details to ${CONTACT.email}, or call ${PHONES}. Report any request for an inducement or any unofficial payment demand too — deal only with the Customer Service Unit.`,
+      intent: "report",
+    }
+
+  if (/(status|track|verify|reference|my application|my file)/.test(s))
+    return {
+      text: `Online verification is being built into a verified site register. For now, quote your reference number to the Customer Service Unit on ${PHONES}. Remember: submission, acknowledgement, payment and approval are separate statuses.`,
+      intent: "status",
+    }
+
+  if (/(director|head of|who (runs|heads|leads))/.test(s))
+    return {
+      text: `${DIRECTOR.name} is the ${DIRECTOR.title} of DOAS. He assumed office on 31 August 2026. Meeting requests go through the Customer Service Unit.`,
+      intent: "meeting",
+    }
+
+  if (/(area council|amac|bwari|kuje|kwali|abaji|gwagwalada|jurisdiction)/.test(s))
+    return {
+      text: `DOAS regulates outdoor advertisement and signage across the Federal Capital Territory, which includes all six Area Councils. For a question about who bills a particular sign, contact the Customer Service Unit on ${PHONES}.`,
+    }
+
+  if (/(where|office|address|located|location|direction|jahi|visit|hours|open|phone|call|number|contact|email)/.test(s))
+    return {
+      text: `The Customer Service Unit is at the ${CONTACT.addressOneLine}. Office hours: ${CONTACT.hours}. Call ${PHONES}, or email ${CONTACT.email}.`,
+    }
+
+  if (/\b(hello|hi|hey|greetings|good (morning|afternoon|evening))\b/.test(s))
+    return {
+      text: "Good day, and welcome. I can help with notices in force, billboard standards, revalidation, payments, reporting a structure and finding our office. What would you like to know?",
+    }
+
+  if (/\b(thank|thanks|appreciate)/.test(s)) return { text: "You are welcome. DOAS is here to help you stay compliant. Is there anything else?" }
 
   return {
-    text: "I can help with signage permits, first-party regularization, billboard and mobile advert applications, reporting unapproved structures, and our office location. For anything else, the Customer Service Unit is on +234 9 291 9181 (Mon–Fri, 8am–4pm) or service@doas.abj.gov.ng.",
+    text: `I can help with current notices, billboard spacing and safety standards, revalidation, payments, first-party signage and reporting a structure. For anything else, call the Customer Service Unit on ${PHONES} (${CONTACT.hoursShort}) or email ${CONTACT.email}.`,
   }
 }
 
@@ -164,19 +208,17 @@ export function ChatWidget() {
         aria-label="DOAS Assistant"
         aria-hidden={!open}
         className={[
-          "fixed z-[80] right-4 bottom-24 sm:right-6 w-[calc(100vw-2rem)] max-w-[392px]",
+          "fixed bottom-24 right-4 z-[80] w-[calc(100vw-2rem)] max-w-[392px] sm:right-6",
           "origin-bottom-right transition-all duration-[380ms] ease-out",
-          open
-            ? "pointer-events-auto translate-y-0 scale-100 opacity-100"
-            : "pointer-events-none translate-y-4 scale-95 opacity-0",
+          open ? "pointer-events-auto translate-y-0 scale-100 opacity-100" : "pointer-events-none translate-y-4 scale-95 opacity-0",
         ].join(" ")}
       >
         <div className="surface-raised flex h-[min(580px,calc(100vh-8rem))] flex-col overflow-hidden rounded-[1.5rem]">
           {/* header */}
           <div className="relative flex items-center gap-3 bg-ink px-4 py-3.5 text-ink-foreground">
             <div className="absolute inset-x-0 bottom-0 h-px bg-gradient-to-r from-gold via-sky to-transparent" aria-hidden />
-            <div className="relative grid h-10 w-10 shrink-0 place-items-center rounded-full bg-gold font-display text-[15px] font-bold text-ink">
-              D
+            <div className="relative grid h-11 w-11 shrink-0 place-items-center rounded-full bg-white p-1.5">
+              <Image src="/doas-logo.png" alt="" width={80} height={80} className="h-full w-auto max-w-full object-contain" />
               <span className="absolute -bottom-0.5 -right-0.5 h-3.5 w-3.5 rounded-full border-2 border-ink bg-[hsl(var(--state-clear))]" />
             </div>
             <div className="min-w-0">
@@ -217,14 +259,17 @@ export function ChatWidget() {
                 >
                   {m.text}
                 </div>
-                <span className="mt-1 px-1 text-[10.5px] tnum text-muted-foreground/70">{stamp(m.at)}</span>
+                {/* the welcome stamp is rendered at build time and again in the browser */}
+                <span suppressHydrationWarning className="mt-1 px-1 text-[10.5px] tnum text-muted-foreground/70">
+                  {stamp(m.at)}
+                </span>
                 {m.from === "bot" && m.intent && (
                   <button
                     onClick={() => openNotify(m.intent!)}
                     className="mt-1 inline-flex items-center gap-2 rounded-full bg-gold px-3.5 py-2 text-[12.5px] font-semibold text-ink transition-transform hover:brightness-105 active:scale-95"
                   >
                     <BellRing className="h-3.5 w-3.5" />
-                    Notify me when this opens
+                    Get updates on this
                   </button>
                 )}
               </div>
@@ -295,14 +340,10 @@ export function ChatWidget() {
         className="group fixed bottom-5 right-4 z-[80] grid h-14 w-14 place-items-center rounded-full bg-ink text-ink-foreground shadow-[0_18px_40px_-14px_hsl(101_60%_4%/0.7)] transition-all duration-300 hover:scale-105 active:scale-95 sm:bottom-6 sm:right-6"
       >
         <span className="absolute inset-0 rounded-full ring-2 ring-gold/0 transition group-hover:ring-gold/60" aria-hidden />
-        <span
-          className={`absolute transition-all duration-300 ${open ? "rotate-90 scale-50 opacity-0" : "rotate-0 scale-100 opacity-100"}`}
-        >
+        <span className={`absolute transition-all duration-300 ${open ? "rotate-90 scale-50 opacity-0" : "rotate-0 scale-100 opacity-100"}`}>
           <MessageSquare className="h-6 w-6" />
         </span>
-        <span
-          className={`absolute transition-all duration-300 ${open ? "rotate-0 scale-100 opacity-100" : "-rotate-90 scale-50 opacity-0"}`}
-        >
+        <span className={`absolute transition-all duration-300 ${open ? "rotate-0 scale-100 opacity-100" : "-rotate-90 scale-50 opacity-0"}`}>
           <X className="h-6 w-6" />
         </span>
         {!seen && (

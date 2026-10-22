@@ -1,206 +1,79 @@
 "use client"
 
-import { useCallback, useEffect, useRef, useState, type FormEvent } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react"
 import Link from "next/link"
 import Image from "next/image"
 import {
   ArrowRight,
   ArrowUpRight,
-  Building2,
+  CalendarClock,
   Check,
   ChevronDown,
+  Clock,
   Download,
   FileText,
-  Gavel,
+  Leaf,
   Mail,
   MapPin,
   Menu,
+  Navigation,
   Pause,
   Phone,
   Play,
   Quote,
   Search,
+  ShieldAlert,
   ShieldCheck,
-  Store,
-  Truck,
+  Ruler,
+  HardHat,
   X,
 } from "lucide-react"
 import { Reveal, Counter, Words, GrowLine, useInView } from "./reveal"
 import { Carousel } from "./carousel"
 import { ChatWidget } from "./chat-widget"
-import { NotifyDialog, openNotify, type NotifyIntent } from "./notify-dialog"
+import { NotifyDialog, openNotify } from "./notify-dialog"
+import {
+  ABOUT,
+  AUDIENCES,
+  CHECKLIST,
+  CONTACT,
+  COUNCILS,
+  DIRECTOR,
+  DIVISIONS,
+  DOWNLOADS,
+  ENVIRONMENT_RULES,
+  FAQS,
+  GALLERY,
+  GUARDRAILS,
+  HERO_PHOTOS,
+  MANDATE,
+  MISSION,
+  NOTICES,
+  PROCESS,
+  REGISTER_FEATURES,
+  SAFETY_RULES,
+  SERVICES,
+  SITING_RULES,
+  SPACING,
+  TAGLINES,
+  VALUES,
+  VISION,
+  type Audience,
+  type Notice,
+  type NotifyIntent,
+  type Photo as PhotoT,
+  type Tone,
+} from "./content"
 import { db } from "@/lib/firebase"
 import { addDoc, collection, serverTimestamp } from "firebase/firestore"
 
-/* ------------------------------------------------------------------ */
-/* Content                                                             */
-/* ------------------------------------------------------------------ */
-
 const NAV = [
-  { label: "Mandate", href: "#mandate" },
+  { label: "About", href: "#about" },
+  { label: "Notices", href: "#notices" },
   { label: "Services", href: "#services" },
-  { label: "Process", href: "#process" },
-  { label: "Gallery", href: "#gallery" },
+  { label: "Standards", href: "#standards" },
   { label: "FAQs", href: "#faqs" },
   { label: "Contact", href: "#contact" },
-]
-
-const COUNCILS = ["AMAC", "Abaji", "Bwari", "Gwagwalada", "Kuje", "Kwali"]
-
-/**
- * Photography. Drop real frames into /public/photos — the component falls back
- * to a branded gradient panel while a file is missing, so nothing breaks.
- * Recommended: 2400×1500, JPEG q80, landscape, no logos burnt in.
- */
-type Photo = { src: string; alt: string; caption: string; place: string }
-
-const HERO_PHOTOS: Photo[] = [
-  {
-    src: "/hero-city-gate.jpg",
-    alt: "Abuja City Gate at dusk with orderly roadside signage",
-    caption: "Every sign in Abuja, accounted for.",
-    place: "City Gate · Airport Road",
-  },
-  {
-    src: "/photos/hero-cbd.jpg",
-    alt: "Central Business District skyline with approved billboard sites",
-    caption: "One register. Six Area Councils.",
-    place: "Central Business District",
-  },
-  {
-    src: "/photos/hero-storefront.jpg",
-    alt: "A row of registered storefront signs on a Wuse II street",
-    caption: "Storefront signage, properly registered.",
-    place: "Wuse II",
-  },
-  {
-    src: "/photos/hero-expressway.jpg",
-    alt: "Unipole billboard beside the Kubwa expressway at golden hour",
-    caption: "Large-format sites that respect the Master Plan.",
-    place: "Kubwa Expressway",
-  },
-]
-
-const GALLERY: Photo[] = [
-  { src: "/photos/g-unipole.jpg", alt: "Approved unipole on an arterial road", caption: "Third-party unipole, allocated through a registered practitioner", place: "y" },
-  { src: "/photos/g-led.jpg", alt: "LED screen on a junction at night", caption: "LED screen on an approved junction site", place: "" },
-  { src: "/photos/g-storefront.jpg", alt: "Registered bank signage on a commercial frontage", caption: "First-party fascia sign, entered in the register", place: "" },
-  { src: "/photos/g-fleet.jpg", alt: "Branded delivery vans with mobile advert permits", caption: "Mobile advert permits listed by registration number", place: "" },
-  { src: "/photos/g-enforcement.jpg", alt: "Enforcement officers inspecting signage", caption: "Monitoring & Enforcement on a routine inspection", place: "" },
-  { src: "/photos/g-office.jpg", alt: "The DOAS Customer Service Unit in Jahi", caption: "The Customer Service Unit, Jahi Head Office", place: "" },
-]
-
-type Service = {
-  n: string
-  icon: typeof Store
-  title: string
-  who: string
-  body: string
-  cta: string
-  intent: NotifyIntent
-  tint: string
-}
-
-const SERVICES: Service[] = [
-  {
-    n: "01",
-    icon: Store,
-    title: "First-Party Signage Regularization",
-    who: "Shops, offices, banks, filling stations, hotels — any sign on your own premises.",
-    body:
-      "Every storefront sign in the FCT must be registered with DOAS. Your file is screened, inspected and entered in the first-party register once the invoice is settled. Online submission opens shortly — leave your email to be notified.",
-    cta: "Join the registration list",
-    intent: "first-party",
-    tint: "bg-gold/30 text-gold-ink",
-  },
-  {
-    n: "02",
-    icon: Building2,
-    title: "Third-Party Billboards & Posters",
-    who: "Advertising agencies and practitioners placing adverts on public or leased sites.",
-    body:
-      "Unipoles, gantries, LED screens, wall wraps, hoardings and poster sites are allocated through registered practitioners, after Monitoring and Planning & Development confirm the site meets the Abuja Master Plan.",
-    cta: "Request the practitioner pack",
-    intent: "third-party",
-    tint: "bg-sky/40 text-sky-ink",
-  },
-  {
-    n: "03",
-    icon: Truck,
-    title: "Mobile Advertisements & Haulage",
-    who: "Branded vehicles, buses, trucks and haulage fleets operating in the FCT.",
-    body:
-      "Vehicle branding is outdoor advertising in motion. Fleet owners and agencies obtain a mobile advert permit for each vehicle, listed by registration number, before the artwork goes on the road.",
-    cta: "Get the fleet requirements",
-    intent: "mobile",
-    tint: "bg-primary/15 text-primary",
-  },
-  {
-    n: "04",
-    icon: Gavel,
-    title: "Enforcement & Demolition",
-    who: "Unapproved structures, expired permits and banners that breach the Master Plan.",
-    body:
-      "Monitoring & Enforcement officers inspect the territory, serve notices and remove structures that are unregistered, unsafe or out of place. Residents can report a violation directly to the department.",
-    cta: "Report a violation",
-    intent: "report",
-    tint: "bg-destructive/10 text-destructive",
-  },
-]
-
-const PROCESS = [
-  { desk: "Customer Service Unit", step: "Submission screened", note: "Your file is checked for completeness and given a reference number." },
-  { desk: "Director's Office", step: "First review", note: "The Director accepts the file for inspection, or returns it with a written reason." },
-  { desk: "Business Development", step: "Site visit", note: "An officer visits the premises and confirms the sign as described." },
-  { desk: "Finance", step: "Invoice & payment", note: "Your assessment is issued; payment is confirmed against the file." },
-  { desk: "Director's Office", step: "Permit approved", note: "The approved sign is entered in the first-party register." },
-]
-
-const CHECKLIST = [
-  { t: "Photograph of the sign", d: "A clear, daylight photo showing the sign in place on the frontage." },
-  { t: "Dimensions", d: "Width and height in metres, and the mounting height from the ground." },
-  { t: "Business registration", d: "CAC certificate, or the name under which the premises is let." },
-  { t: "Site address", d: "Street, plot number, district and Area Council." },
-  { t: "Proof of occupancy", d: "Tenancy agreement or title document for the premises." },
-  { t: "Contact details", d: "A phone number and email that the Customer Service Unit can reach." },
-]
-
-const NOTICES = [
-  "First-party regularization exercise is ongoing across all six Area Councils",
-  "No DOAS fee is ever collected outside an official invoice",
-  "Online filing and permit verification open with the public portal",
-  "Demand letters must be acted upon within the period stated on them",
-]
-
-const FAQS = [
-  {
-    q: "What is the primary role of DOAS?",
-    a: "DOAS regulates all outdoor signage, billboards, mobile adverts and banners across the Federal Capital Territory, so that outdoor advertising aligns with the Abuja Master Plan and the capital is kept free of visual clutter.",
-  },
-  {
-    q: "Do I need a permit for a sign right outside my business storefront?",
-    a: "Yes. This is classified as First-Party Signage. DOAS is running a mandatory First-Party Signage Regularization exercise, and every storefront sign must be registered at the Jahi Head Office to avoid operational sanctions. Online registration is being connected to the internal register and will open shortly.",
-  },
-  {
-    q: "How does DOAS interact with the Area Councils, such as AMAC?",
-    a: "Under a Memorandum of Understanding, DOAS is the central regulatory and revenue-collection point for signage in the FCT. Collected funds are shared by law among all six Area Councils, which ends the double billing of the same sign.",
-  },
-  {
-    q: "Where is the DOAS headquarters located for registration?",
-    a: "The DOAS Head Office is at Katampe Road, Jahi, Abuja, FCT 900321. Office hours are Monday to Friday, 8:00am to 4:00pm.",
-  },
-  {
-    q: "How do I check the status of an application I have already submitted?",
-    a: "Quote your reference number to the Customer Service Unit on +234 9 291 9181 and the desk currently holding your file will be confirmed to you. Online tracking — showing every movement between the CSU, the Director's office, Business Development and Finance — opens with the public portal.",
-  },
-  {
-    q: "I received a demand letter. What should I do?",
-    a: "Act within the period stated on the letter. Bring it, together with your business registration and a photograph of the sign, to the Jahi Head Office. Signs regularized in time are not subject to removal, and no DOAS fee is ever collected outside an official invoice.",
-  },
-  {
-    q: "What happens to a sign that is never registered?",
-    a: "Unregistered structures are served notice by Monitoring & Enforcement and, if not regularized within the period stated, are removed at the owner's cost. Registering is faster, cheaper and keeps your frontage intact.",
-  },
 ]
 
 /* ------------------------------------------------------------------ */
@@ -209,7 +82,7 @@ const FAQS = [
 
 export function Landing() {
   return (
-    <div className="min-h-screen bg-background text-foreground">
+    <div className="min-h-screen overflow-x-clip bg-background text-foreground">
       <a
         href="#main"
         className="sr-only focus:not-sr-only focus:fixed focus:left-3 focus:top-3 focus:z-[100] focus:rounded-lg focus:bg-ink focus:px-4 focus:py-2.5 focus:text-ink-foreground"
@@ -221,14 +94,17 @@ export function Landing() {
 
       <main id="main">
         <Hero />
-        <NoticeTicker />
-        <CouncilStrip />
-        <Mandate />
+        <TaglineMarquee />
+        <About />
+        <Director />
+        <Notices />
         <Services />
-        <Leadership />
         <Process />
-        <Checklist />
+        <Prepare />
+        <Standards />
         <Gallery />
+        <Divisions />
+        <Register />
         <Faqs />
         <Newsletter />
         <Contact />
@@ -242,16 +118,17 @@ export function Landing() {
 }
 
 /* ------------------------------------------------------------------ */
-/* Photo — next/image with a branded fallback                          */
+/* Shared bits                                                          */
 /* ------------------------------------------------------------------ */
 
+/** next/image with a branded fallback while a photo file is missing */
 function Photo({
   photo,
   priority = false,
   sizes = "100vw",
   className = "",
 }: {
-  photo: Photo
+  photo: PhotoT
   priority?: boolean
   sizes?: string
   className?: string
@@ -281,6 +158,77 @@ function Photo({
   )
 }
 
+/**
+ * The emblem keeps its own proportions (w-auto + object-contain) instead of
+ * being forced into a square, and gets clear space around it.
+ */
+function Logo({ className = "h-14", priority = false }: { className?: string; priority?: boolean }) {
+  return (
+    <Image
+      src="/doas-logo.png"
+      alt="DOAS — Department of Outdoor Advertisement and Signage"
+      width={240}
+      height={240}
+      priority={priority}
+      className={`w-auto max-w-none object-contain ${className}`}
+    />
+  )
+}
+
+const TONES: Record<Tone, { dot: string; chip: string; bar: string }> = {
+  clear: {
+    dot: "bg-[hsl(var(--state-clear))]",
+    chip: "bg-[hsl(var(--state-clear-soft))] text-[hsl(var(--state-clear))]",
+    bar: "bg-[hsl(var(--state-clear))]",
+  },
+  wait: {
+    dot: "bg-[hsl(var(--state-wait))]",
+    chip: "bg-[hsl(var(--state-wait-soft))] text-[hsl(var(--state-wait))]",
+    bar: "bg-[hsl(var(--state-wait))]",
+  },
+  stop: {
+    dot: "bg-[hsl(var(--state-stop))]",
+    chip: "bg-[hsl(var(--state-stop-soft))] text-[hsl(var(--state-stop))]",
+    bar: "bg-[hsl(var(--state-stop))]",
+  },
+  move: {
+    dot: "bg-[hsl(var(--state-move))]",
+    chip: "bg-[hsl(var(--state-move-soft))] text-[hsl(var(--state-move))]",
+    bar: "bg-[hsl(var(--state-move))]",
+  },
+  idle: {
+    dot: "bg-[hsl(var(--state-idle))]",
+    chip: "bg-[hsl(var(--state-idle-soft))] text-[hsl(var(--state-idle))]",
+    bar: "bg-[hsl(var(--state-idle))]",
+  },
+}
+
+function StatusChip({ tone, label, dark = false, pulse = false }: { tone: Tone; label: string; dark?: boolean; pulse?: boolean }) {
+  const t = TONES[tone]
+  return (
+    <span
+      className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-1 text-[11.5px] font-semibold leading-none ${
+        dark ? "bg-white/10 text-ink-foreground" : t.chip
+      }`}
+    >
+      <span className={`relative h-1.5 w-1.5 shrink-0 rounded-full ${t.dot} ${pulse ? "ping-dot" : ""}`} />
+      {label}
+    </span>
+  )
+}
+
+function SectionLabel({ n, label, light = false }: { n: string; label: string; light?: boolean }) {
+  return (
+    <p className={`flex items-center gap-3 text-[11.5px] font-semibold uppercase tracking-[0.18em] ${light ? "text-gold" : "text-primary"}`}>
+      <span className={`figure ${light ? "text-ink-foreground/50" : "text-muted-foreground/70"}`}>{n}</span>
+      <span className="h-px w-7 bg-gold" />
+      {label}
+    </p>
+  )
+}
+
+const H2 = "font-display text-[2rem] font-semibold leading-[1.08] tracking-tight text-balance sm:text-4xl lg:text-[2.9rem]"
+
 /* ------------------------------------------------------------------ */
 /* Header                                                              */
 /* ------------------------------------------------------------------ */
@@ -294,7 +242,7 @@ function Header() {
     const onScroll = () => {
       const y = window.scrollY
       const h = document.documentElement.scrollHeight - window.innerHeight
-      setScrolled(y > 20)
+      setScrolled(y > 24)
       setProgress(h > 0 ? Math.min(100, (y / h) * 100) : 0)
     }
     onScroll()
@@ -314,46 +262,52 @@ function Header() {
       {/* government strip */}
       <div className="bg-ink text-[11.5px] tracking-wide text-ink-foreground/75">
         <div className="mx-auto flex h-9 max-w-7xl items-center justify-between gap-4 px-4 sm:px-6 lg:px-8">
-          <p className="flex items-center gap-2 truncate">
+          <p className="flex min-w-0 items-center gap-2.5">
             <span
-              className="inline-block h-3 w-[18px] rounded-[2px] bg-[linear-gradient(90deg,#008751_33%,#fff_33%,#fff_66%,#008751_66%)]"
+              className="inline-block h-3 w-[18px] shrink-0 rounded-[2px] bg-[linear-gradient(90deg,#008751_33%,#fff_33%,#fff_66%,#008751_66%)]"
               aria-hidden
             />
-            An official agency of the Federal Capital Territory Administration
+            <span className="truncate">A department of the Federal Capital Territory Administration</span>
           </p>
-          <p className="hidden tnum sm:block">Mon – Fri · 8:00am – 4:00pm · +234 9 291 9181</p>
+          <p className="hidden items-center gap-4 tnum md:flex">
+            <span>{CONTACT.hoursShort}</span>
+            <span className="h-3 w-px bg-white/20" aria-hidden />
+            {CONTACT.phones.map((p) => (
+              <a key={p.tel} href={`tel:${p.tel}`} className="transition-colors hover:text-gold">
+                {p.display}
+              </a>
+            ))}
+          </p>
         </div>
       </div>
 
       <header
         className={[
           "sticky top-0 z-50 transition-all duration-300",
-          scrolled ? "bg-background/80 shadow-[0_1px_0_0_hsl(var(--border))] backdrop-blur-xl" : "bg-background",
+          scrolled ? "bg-background/85 shadow-[0_1px_0_0_hsl(var(--border))] backdrop-blur-xl" : "bg-background",
         ].join(" ")}
       >
         <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
-          <div className={`flex items-center justify-between transition-[height] duration-300 ${scrolled ? "h-[68px]" : "h-20"}`}>
-            <Link href="/" className="group flex items-center gap-3" aria-label="DOAS home">
-              <span className="relative">
-                <span className="absolute -inset-1.5 rounded-full bg-gold/0 transition-colors duration-300 group-hover:bg-gold/25" aria-hidden />
-                <Image
-                  src="/doas-logo.png"
-                  alt="DOAS — Department of Outdoor Advertisement and Signage"
-                  width={48}
-                  height={48}
-                  priority
-                  className={`relative transition-all duration-300 ${scrolled ? "h-10 w-10" : "h-12 w-12"}`}
+          <div className={`flex items-center justify-between gap-6 transition-[height] duration-300 ${scrolled ? "h-[76px]" : "h-[92px]"}`}>
+            <Link href="/" className="group flex shrink-0 items-center gap-4 py-2" aria-label="DOAS home">
+              <span className="relative flex items-center">
+                <span
+                  className="absolute -inset-2 rounded-full bg-gold/0 transition-colors duration-300 group-hover:bg-gold/20"
+                  aria-hidden
                 />
+                <Logo priority className={`relative transition-all duration-300 ${scrolled ? "h-11 sm:h-12" : "h-12 sm:h-[60px]"}`} />
               </span>
-              <span className="leading-tight">
-                <span className="block font-display text-[19px] font-semibold tracking-tight">DOAS</span>
-                <span className="block text-[10.5px] uppercase tracking-[0.16em] text-muted-foreground">
-                  Outdoor Advertisement &amp; Signage
+              <span className="hidden h-10 w-px bg-border sm:block" aria-hidden />
+              <span className="leading-none">
+                <span className="block font-display text-[20px] font-semibold tracking-tight sm:text-[22px]">DOAS</span>
+                <span className="mt-1.5 block text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground sm:text-[10.5px]">
+                  Department of Outdoor Advertisement &amp; Signage
                 </span>
+                <span className="mt-1 hidden text-[11px] text-muted-foreground/80 sm:block">FCT Administration · Abuja</span>
               </span>
             </Link>
 
-            <nav className="hidden items-center gap-7 lg:flex" aria-label="Primary">
+            <nav className="hidden items-center gap-6 lg:flex xl:gap-8" aria-label="Primary">
               {NAV.map((n) => (
                 <a
                   key={n.href}
@@ -368,23 +322,23 @@ function Header() {
             <div className="hidden items-center gap-2 lg:flex">
               <button
                 onClick={() => openNotify("status")}
-                className="inline-flex h-11 items-center gap-2 rounded-xl px-4 text-sm font-medium text-foreground/80 transition-colors hover:bg-secondary"
+                className="hidden h-11 items-center gap-2 rounded-xl px-4 text-sm font-medium text-foreground/80 transition-colors hover:bg-secondary xl:inline-flex"
               >
                 <Search className="h-4 w-4" />
                 Verify a permit
               </button>
-              <button
-                onClick={() => openNotify("first-party")}
+              <a
+                href="#services"
                 className="sheen inline-flex h-11 items-center gap-2 rounded-xl bg-ink px-5 text-sm font-semibold text-ink-foreground transition-transform active:scale-[0.98]"
               >
-                Register signage
+                Find a service
                 <ArrowRight className="h-4 w-4" />
-              </button>
+              </a>
             </div>
 
             <button
               onClick={() => setOpen(true)}
-              className="-mr-2 grid h-11 w-11 place-items-center rounded-xl text-foreground hover:bg-secondary lg:hidden"
+              className="-mr-2 grid h-11 w-11 shrink-0 place-items-center rounded-xl text-foreground hover:bg-secondary lg:hidden"
               aria-label="Open menu"
               aria-expanded={open}
             >
@@ -404,7 +358,7 @@ function Header() {
 
       {/* mobile sheet */}
       <div
-        className={`fixed inset-0 z-[60] transition lg:hidden ${open ? "pointer-events-auto" : "pointer-events-none"}`}
+        className={`fixed inset-0 z-[60] overflow-hidden transition lg:hidden ${open ? "pointer-events-auto" : "pointer-events-none"}`}
         aria-hidden={!open}
       >
         <div
@@ -412,22 +366,33 @@ function Header() {
           className={`absolute inset-0 bg-ink/70 backdrop-blur-sm transition-opacity duration-300 ${open ? "opacity-100" : "opacity-0"}`}
         />
         <div
-          className={`absolute right-0 top-0 flex h-full w-[88%] max-w-sm flex-col bg-card shadow-2xl transition-transform duration-[420ms] ease-out ${open ? "translate-x-0" : "translate-x-full"}`}
+          className={`absolute right-0 top-0 flex h-full w-[88%] max-w-sm flex-col bg-card shadow-2xl transition-transform duration-[420ms] ease-out ${
+            open ? "translate-x-0" : "translate-x-full"
+          }`}
         >
-          <div className="flex h-20 items-center justify-between border-b border-border px-5">
-            <p className="font-display text-lg font-semibold">Menu</p>
-            <button onClick={() => setOpen(false)} className="grid h-11 w-11 place-items-center rounded-xl hover:bg-secondary" aria-label="Close menu">
+          <div className="flex h-24 items-center justify-between border-b border-border px-5">
+            <div className="flex items-center gap-3">
+              <Logo className="h-11" />
+              <p className="font-display text-lg font-semibold">Menu</p>
+            </div>
+            <button
+              onClick={() => setOpen(false)}
+              className="grid h-11 w-11 place-items-center rounded-xl hover:bg-secondary"
+              aria-label="Close menu"
+            >
               <X className="h-6 w-6" />
             </button>
           </div>
-          <nav className="flex flex-col px-3 py-4" aria-label="Mobile">
+          <nav className="flex flex-col overflow-y-auto px-3 py-4" aria-label="Mobile">
             {NAV.map((n, i) => (
               <a
                 key={n.href}
                 href={n.href}
                 onClick={() => setOpen(false)}
                 style={{ transitionDelay: `${open ? 90 + i * 45 : 0}ms` }}
-                className={`flex items-center justify-between rounded-xl px-3 py-3.5 text-[17px] font-medium transition-all duration-300 hover:bg-secondary ${open ? "translate-x-0 opacity-100" : "translate-x-5 opacity-0"}`}
+                className={`flex items-center justify-between rounded-xl px-3 py-3.5 text-[17px] font-medium transition-all duration-300 hover:bg-secondary ${
+                  open ? "translate-x-0 opacity-100" : "translate-x-5 opacity-0"
+                }`}
               >
                 {n.label}
                 <ArrowUpRight className="h-4 w-4 text-muted-foreground" />
@@ -435,15 +400,13 @@ function Header() {
             ))}
           </nav>
           <div className="mt-auto space-y-2 border-t border-border p-5">
-            <button
-              onClick={() => {
-                setOpen(false)
-                openNotify("first-party")
-              }}
+            <a
+              href="#services"
+              onClick={() => setOpen(false)}
               className="flex w-full items-center justify-center gap-2 rounded-xl bg-ink py-3.5 font-semibold text-ink-foreground"
             >
-              Register signage <ArrowRight className="h-4 w-4" />
-            </button>
+              Find a service <ArrowRight className="h-4 w-4" />
+            </a>
             <button
               onClick={() => {
                 setOpen(false)
@@ -453,7 +416,13 @@ function Header() {
             >
               <Search className="h-4 w-4" /> Verify a permit
             </button>
-            <p className="pt-2 text-center text-xs text-muted-foreground">Katampe Road, Jahi, Abuja · +234 9 291 9181</p>
+            <div className="flex justify-center gap-4 pt-2 text-xs text-muted-foreground tnum">
+              {CONTACT.phones.map((p) => (
+                <a key={p.tel} href={`tel:${p.tel}`} className="hover:text-foreground">
+                  {p.display}
+                </a>
+              ))}
+            </div>
           </div>
         </div>
       </div>
@@ -492,7 +461,7 @@ function Hero() {
     <section
       className="relative isolate overflow-hidden bg-ink text-ink-foreground"
       aria-roledescription="carousel"
-      aria-label="Abuja signage photography"
+      aria-label="Abuja photography"
       onTouchStart={(e) => (touchX.current = e.touches[0].clientX)}
       onTouchEnd={(e) => {
         if (touchX.current === null) return
@@ -501,7 +470,6 @@ function Hero() {
         touchX.current = null
       }}
     >
-      {/* slides */}
       {HERO_PHOTOS.map((p, k) => {
         const active = k === i
         return (
@@ -518,57 +486,66 @@ function Hero() {
       })}
 
       {/* grading */}
-      <div className="absolute inset-0 bg-[linear-gradient(90deg,hsl(var(--ink)/.92)_0%,hsl(var(--ink)/.72)_38%,hsl(var(--ink)/.25)_70%,hsl(var(--ink)/.1)_100%)]" aria-hidden />
-      <div className="absolute inset-x-0 bottom-0 h-56 bg-gradient-to-t from-ink to-transparent" aria-hidden />
-      <div className="absolute inset-0 grid-paper opacity-[0.07] [--border:48_30%_96%] [mask-image:radial-gradient(ellipse_at_20%_40%,black_10%,transparent_65%)]" aria-hidden />
+      <div
+        className="absolute inset-0 bg-[linear-gradient(90deg,hsl(var(--ink)/.94)_0%,hsl(var(--ink)/.76)_40%,hsl(var(--ink)/.35)_72%,hsl(var(--ink)/.2)_100%)]"
+        aria-hidden
+      />
+      <div className="absolute inset-x-0 bottom-0 h-64 bg-gradient-to-t from-ink to-transparent" aria-hidden />
+      <div
+        className="absolute inset-0 grid-paper opacity-[0.07] [--border:48_30%_96%] [mask-image:radial-gradient(ellipse_at_20%_40%,black_10%,transparent_65%)]"
+        aria-hidden
+      />
 
-      <div className="relative mx-auto flex min-h-[86svh] max-w-7xl flex-col justify-end px-4 pb-14 pt-20 sm:px-6 lg:min-h-[88vh] lg:px-8 lg:pb-20 lg:pt-24">
-        <div className="max-w-3xl">
-          <Reveal index={0}>
-            <p className="inline-flex items-center gap-2.5 rounded-full border border-white/15 bg-white/[0.06] px-3.5 py-1.5 text-[11.5px] font-semibold uppercase tracking-[0.16em] text-gold backdrop-blur">
-              <span className="relative h-2 w-2 rounded-full bg-gold ping-dot" />
-              FCT Administration · Abuja
-            </p>
-          </Reveal>
+      <div className="relative mx-auto flex min-h-[88svh] max-w-7xl flex-col justify-end px-4 pb-12 pt-20 sm:px-6 lg:min-h-[90vh] lg:px-8 lg:pb-16 lg:pt-24">
+        <Reveal index={0}>
+          <p className="inline-flex items-center gap-2.5 rounded-full border border-white/15 bg-white/[0.06] px-3.5 py-1.5 text-[11.5px] font-semibold uppercase tracking-[0.16em] text-gold backdrop-blur">
+            <span className="relative h-2 w-2 rounded-full bg-gold ping-dot" />
+            FCT Administration · Abuja
+          </p>
+        </Reveal>
 
-          <h1 className="mt-7 font-display text-[2.9rem] font-semibold leading-[0.98] tracking-tight sm:text-6xl lg:text-[5rem]">
-            <Words text="Every sign in Abuja," as="span" className="block" />
-            <Words text="accounted for." as="span" className="mt-1 block text-gold" start={4} />
-          </h1>
+      <h1 className="mt-7 font-display text-[2.15rem] font-semibold leading-[1.04] tracking-tight sm:text-6xl lg:text-[4.75rem]">
+  <Words text="Every iconic billboard" as="span" className="block" />
+  <Words text="shining across Abuja," as="span" className="block" start={3} />
+  <Words text="starts right here." as="span" className="mt-1 block text-gold" start={7} />
+</h1>
 
-          <Reveal index={4} as="p" className="mt-7 max-w-xl text-[17px] leading-relaxed text-ink-foreground/80">
-            The Department of Outdoor Advertisement and Signage regulates billboards, storefront signs, mobile adverts and
-            banners across the Federal Capital Territory — one register, one permit, and one point of contact for the
-            capital&rsquo;s advertisers, property owners and residents.
-          </Reveal>
 
-          <Reveal index={5} className="mt-9 flex flex-col gap-3 sm:flex-row">
-            <button
-              onClick={() => openNotify("first-party")}
-              className="group inline-flex h-[56px] items-center justify-center gap-2.5 rounded-2xl bg-gold px-7 text-[15px] font-semibold text-ink shadow-[0_18px_40px_-16px_hsl(46_90%_40%/.7)] transition-transform hover:brightness-105 active:scale-[0.98]"
-            >
-              Register First-Party Signage
-              <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-1" />
-            </button>
-            <a
-              href="/downloads/doas-signage-guidelines.pdf"
-              className="inline-flex h-[56px] items-center justify-center gap-2.5 rounded-2xl border border-white/15 bg-white/[0.06] px-7 text-[15px] font-semibold text-ink-foreground backdrop-blur transition-colors hover:bg-white/10"
-            >
-              <Download className="h-4 w-4" />
-              Download Guidelines (PDF)
-            </a>
-          </Reveal>
+        <div className="mt-8 max-w-2xl">
+          <div>
+            <Reveal index={4} as="p" className="max-w-xl text-[17px] leading-relaxed text-ink-foreground/80 sm:text-[18px]">
+              DOAS is the FCTA department that looks after billboards and signs across Abuja. We approve sites, check that
+              structures are safe, and step in when something goes up where it shouldn&rsquo;t. Whether you run an advertising
+              company or just want a sign over your shop, this is where you start.
+            </Reveal>
 
-          <Reveal index={6} className="mt-9 flex flex-wrap items-center gap-x-6 gap-y-2.5 text-[13.5px] text-ink-foreground/70">
-            {["One register for all six Area Councils", "No fee outside an official invoice"].map((t) => (
-              <span key={t} className="inline-flex items-center gap-2">
-                <span className="grid h-5 w-5 place-items-center rounded-full bg-[hsl(var(--state-clear))]">
-                  <Check className="h-3 w-3 text-white" strokeWidth={3.5} />
+            <Reveal index={5} className="mt-9 flex flex-col gap-3 sm:flex-row">
+              <a
+                href="#notices"
+                className="group inline-flex h-[56px] items-center justify-center gap-2.5 rounded-2xl bg-gold px-7 text-[15px] font-semibold text-ink shadow-[0_18px_40px_-16px_hsl(46_90%_40%/.7)] transition-transform hover:brightness-105 active:scale-[0.98]"
+              >
+                Read current notices
+                <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-1" />
+              </a>
+              <a
+                href="#services"
+                className="inline-flex h-[56px] items-center justify-center gap-2.5 rounded-2xl border border-white/15 bg-white/[0.06] px-7 text-[15px] font-semibold text-ink-foreground backdrop-blur transition-colors hover:bg-white/10"
+              >
+                Find a service
+              </a>
+            </Reveal>
+
+            <Reveal index={6} className="mt-9 flex flex-wrap items-center gap-x-6 gap-y-2.5 text-[13.5px] text-ink-foreground/70">
+              {["Deal with us directly, not middlemen", "Only pay against an official DOAS bill"].map((t) => (
+                <span key={t} className="inline-flex items-center gap-2">
+                  <span className="grid h-5 w-5 place-items-center rounded-full bg-[hsl(var(--state-clear))]">
+                    <Check className="h-3 w-3 text-white" strokeWidth={3.5} />
+                  </span>
+                  {t}
                 </span>
-                {t}
-              </span>
-            ))}
-          </Reveal>
+              ))}
+            </Reveal>
+          </div>
         </div>
 
         {/* carousel chrome */}
@@ -597,7 +574,10 @@ function Hero() {
                 >
                   <span
                     className={`absolute inset-y-0 left-0 bg-gold ${k === i && playing && !reduced ? "hero-bar" : ""}`}
-                    style={{ width: k < i ? "100%" : k === i ? (playing && !reduced ? undefined : "100%") : "0%" }}
+                    style={{
+                      width: k < i ? "100%" : k === i ? (playing && !reduced ? undefined : "100%") : "0%",
+                      ["--hero-interval" as string]: `${HERO_INTERVAL}ms`,
+                    }}
                   />
                 </button>
               ))}
@@ -617,240 +597,137 @@ function Hero() {
 }
 
 /* ------------------------------------------------------------------ */
-/* Notice ticker                                                        */
+/* Tagline marquee                                                      */
 /* ------------------------------------------------------------------ */
 
-function NoticeTicker() {
-  const items = [...NOTICES, ...NOTICES]
+function TaglineMarquee() {
+  const items = [...TAGLINES, ...TAGLINES]
   return (
-    <div className="border-b border-gold/40 bg-gold text-ink" role="region" aria-label="Public notices">
-      <div className="mx-auto flex h-11 max-w-7xl items-center px-4 sm:px-6 lg:px-8">
-        <p className="mr-5 flex shrink-0 items-center gap-2 border-r border-ink/15 pr-5 text-[11px] font-bold uppercase tracking-[0.16em]">
-          <span className="relative h-2 w-2 rounded-full bg-ink ping-dot" />
-          Notices
-        </p>
-        <div className="mask-fade-x relative flex-1 overflow-hidden">
-          <div className="marquee flex w-max items-center gap-10 text-[13.5px] font-medium">
-            {items.map((n, k) => (
-              <span key={k} className="flex items-center gap-10">
-                {n}
-                <span className="h-1.5 w-1.5 rotate-45 bg-ink/60" aria-hidden />
-              </span>
-            ))}
-          </div>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-/* ------------------------------------------------------------------ */
-/* Council strip                                                        */
-/* ------------------------------------------------------------------ */
-
-function CouncilStrip() {
-  const items = [...COUNCILS, ...COUNCILS]
-  return (
-    <div className="overflow-hidden border-b border-border bg-card/70" aria-label="Area councils covered">
-      <div className="mx-auto flex h-16 max-w-7xl items-center px-4 sm:px-6 lg:px-8">
-        <p className="mr-6 shrink-0 border-r border-border pr-6 text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
-          One register
-          <br className="hidden sm:block" /> six councils
-        </p>
-        <div className="mask-fade-x relative flex-1 overflow-hidden">
-          <div className="marquee flex w-max items-center gap-10" style={{ animationDuration: "40s" }}>
-            {items.map((c, k) => (
-              <span key={k} className="flex items-center gap-10 font-display text-[17px] font-semibold tracking-tight text-foreground/70">
-                {c} Area Council
-                <span className="h-2 w-2 rotate-45 bg-gold" />
-              </span>
-            ))}
-          </div>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-/* ------------------------------------------------------------------ */
-/* Mandate                                                              */
-/* ------------------------------------------------------------------ */
-
-function Mandate() {
-  const stats = [
-    { v: 6, s: "", l: "Area Councils unified under one MoU" },
-    { v: 4, s: "", l: "Classes of outdoor advertising regulated" },
-    { v: 5, s: "", l: "Review desks on every first-party file" },
-    { v: 100, s: "%", l: "Of signage tied to the Abuja Master Plan" },
-  ]
-  return (
-    <section id="mandate" className="scroll-mt-28 py-20 lg:py-28">
-      <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
-        <div className="grid gap-10 lg:grid-cols-12 lg:gap-16">
-          <div className="lg:col-span-5">
-            <Reveal>
-              <SectionLabel n="01" label="Core mandate" />
-              <h2 className="mt-5 font-display text-[2rem] font-semibold leading-[1.08] tracking-tight text-balance sm:text-4xl lg:text-[2.9rem]">
-                A single authority for the capital&rsquo;s outdoor landscape.
-              </h2>
-            </Reveal>
-            <Reveal index={2} className="relative mt-8 aspect-[4/3] overflow-hidden rounded-[1.75rem] hairline">
-              <Photo photo={GALLERY[2]} sizes="(min-width:1024px) 40vw, 100vw" />
-              <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-ink/80 to-transparent p-5 text-[12.5px] text-ink-foreground/85">
-                {GALLERY[2].caption} · <span className="text-gold">{GALLERY[2].place}</span>
-              </div>
-            </Reveal>
-          </div>
-          <div className="space-y-5 text-[16.5px] leading-relaxed text-muted-foreground lg:col-span-7">
-            <Reveal index={1} as="p" className="font-display text-[22px] leading-snug text-foreground sm:text-[24px]">
-              For years, a business in Wuse or Gwarinpa could be billed for the same sign by more than one authority, while
-              unregulated billboards crowded the capital&rsquo;s skyline. DOAS was established to end both.
-            </Reveal>
-            <Reveal index={2} as="p">
-              Under a Memorandum of Understanding with the six Area Councils —{" "}
-              <span className="font-medium text-foreground">AMAC, Abaji, Bwari, Gwagwalada, Kuje and Kwali</span> — the department
-              is now the central point for signage approval and revenue in the FCT. Every collected naira is shared among the
-              councils by law, and every approved structure is tied to the Abuja Master Plan.
-            </Reveal>
-            <Reveal index={3} as="p">
-              Four classes of outdoor advertising fall under the mandate: first-party signage on business premises, third-party
-              billboards and poster sites, mobile advertising on vehicles, and temporary banners. Each has its own permit, its
-              own review desks and its own place in the register.
-            </Reveal>
-            <Reveal index={4} as="p">
-              The result is one register, one permit and one point of contact — and a capital whose streets read as the Master
-              Plan intended.
-            </Reveal>
-            <Reveal index={5} className="flex flex-wrap gap-3 pt-2">
-              <a
-                href="/downloads/doas-signage-guidelines.pdf"
-                className="inline-flex h-12 items-center gap-2 rounded-xl bg-ink px-5 text-[14.5px] font-semibold text-ink-foreground transition-transform active:scale-[0.98]"
-              >
-                <FileText className="h-4 w-4" /> Signage guidelines
-              </a>
-              <a href="#process" className="inline-flex h-12 items-center gap-2 rounded-xl px-5 text-[14.5px] font-semibold transition-colors hairline hover:bg-secondary">
-                How a file moves <ArrowRight className="h-4 w-4" />
-              </a>
-            </Reveal>
-          </div>
-        </div>
-
-        <div className="mt-16 grid grid-cols-2 gap-px overflow-hidden rounded-3xl bg-border hairline lg:grid-cols-4">
-          {stats.map((s, k) => (
-            <Reveal key={s.l} index={k} className="group relative bg-card p-6 sm:p-8">
-              <span className="absolute left-0 top-0 h-1 w-0 bg-gold transition-[width] duration-700 group-hover:w-full" aria-hidden />
-              <p className="text-[2.6rem] font-semibold tracking-tight sm:text-5xl">
-                <Counter value={s.v} suffix={s.s} />
-              </p>
-              <p className="mt-3 max-w-[18ch] text-[13.5px] leading-snug text-muted-foreground">{s.l}</p>
-            </Reveal>
+    <div className="overflow-hidden border-b border-gold/40 bg-gold text-ink" aria-label="DOAS taglines">
+      <div className="mask-fade-x relative flex h-14 items-center">
+        <div className="marquee flex w-max items-center gap-12 font-display text-[17px] font-semibold tracking-tight sm:text-[19px]">
+          {items.map((n, k) => (
+            <span key={k} className="flex items-center gap-12 whitespace-nowrap" aria-hidden={k >= TAGLINES.length}>
+              {n}
+              <span className="h-2 w-2 rotate-45 bg-ink/70" aria-hidden />
+            </span>
           ))}
         </div>
       </div>
-    </section>
-  )
-}
-
-function SectionLabel({ n, label, light = false }: { n: string; label: string; light?: boolean }) {
-  return (
-    <p className={`flex items-center gap-3 text-[11.5px] font-semibold uppercase tracking-[0.18em] ${light ? "text-gold" : "text-primary"}`}>
-      <span className={`figure ${light ? "text-ink-foreground/50" : "text-muted-foreground/70"}`}>{n}</span>
-      <span className="h-px w-7 bg-gold" />
-      {label}
-    </p>
+    </div>
   )
 }
 
 /* ------------------------------------------------------------------ */
-/* Services — carousel                                                  */
+/* Jurisdiction strip                                                   */
 /* ------------------------------------------------------------------ */
 
-function Services() {
+
+
+/* ------------------------------------------------------------------ */
+/* About — identity, mandate, vision, mission, values                   */
+/* ------------------------------------------------------------------ */
+
+function About() {
   return (
-    <section id="services" className="scroll-mt-28 border-y border-border bg-card py-20 lg:py-28">
+    <section id="about" className="scroll-mt-28 py-20 lg:py-28">
       <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
-        <div className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
-          <Reveal className="max-w-2xl">
-            <SectionLabel n="02" label="Services & permits" />
-            <h2 className="mt-5 font-display text-[2rem] font-semibold leading-[1.08] tracking-tight sm:text-4xl lg:text-[2.9rem]">
-              Which permit do you need?
-            </h2>
-            <p className="mt-4 text-[16.5px] leading-relaxed text-muted-foreground">
-              Outdoor advertising in the FCT falls into four pipelines. Find yours — and while online filing is being connected,
-              leave your email and we will write to you the day it opens.
-            </p>
-          </Reveal>
-          <Reveal index={1} className="hidden shrink-0 items-center gap-2 text-[13px] text-muted-foreground lg:flex">
-            <span className="h-px w-8 bg-border" />
-            Drag, swipe or use the arrows
-          </Reveal>
+        <div className="grid gap-12 lg:grid-cols-12 lg:gap-16">
+          <div className="lg:col-span-7">
+            <Reveal>
+              <SectionLabel n="01" label="About DOAS" />
+              <h2 className={`mt-5 ${H2}`}>The regulator of Out-Of-Home advertising and signage in the FCT.</h2>
+            </Reveal>
+            <Reveal index={1} as="p" className="mt-7 font-display text-[21px] leading-snug text-foreground sm:text-[23px]">
+              {ABOUT.lead}
+            </Reveal>
+            {ABOUT.body.map((p, k) => (
+              <Reveal key={k} index={2 + k} as="p" className="mt-5 text-[16.5px] leading-relaxed text-muted-foreground">
+                {p}
+              </Reveal>
+            ))}
+
+            <Reveal index={4} className="mt-10">
+              <p className="text-[11.5px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">Our mandate</p>
+              <ol className="mt-4 divide-y divide-border border-y border-border">
+                {MANDATE.map((m, k) => (
+                  <li key={k} className="group flex gap-5 py-4">
+                    <span className="figure mt-0.5 w-6 shrink-0 text-[13px] text-muted-foreground/60 transition-colors group-hover:text-primary">
+                      {String(k + 1).padStart(2, "0")}
+                    </span>
+                    <span className="text-[15.5px] leading-relaxed">{m}</span>
+                  </li>
+                ))}
+              </ol>
+            </Reveal>
+          </div>
+
+          <div className="flex flex-col gap-5 lg:col-span-5 lg:pt-14">
+            <Reveal index={1} className="relative overflow-hidden rounded-[1.75rem] bg-ink p-7 text-ink-foreground sm:p-9">
+              <div className="absolute -right-16 -top-16 h-56 w-56 rounded-full bg-gold opacity-25 blur-[70px]" aria-hidden />
+              <div className="absolute inset-0 grid-paper opacity-[0.06] [--border:48_30%_96%]" aria-hidden />
+              <div className="relative">
+                <p className="flex items-center gap-2 text-[11.5px] font-semibold uppercase tracking-[0.18em] text-gold">
+                  <span className="h-px w-6 bg-gold" /> Vision
+                </p>
+                <p className="mt-4 font-display text-[21px] font-medium leading-snug tracking-tight sm:text-[23px]">{VISION}</p>
+              </div>
+            </Reveal>
+            <Reveal index={2} className="rounded-[1.75rem] bg-card p-7 hairline sm:p-9">
+              <p className="flex items-center gap-2 text-[11.5px] font-semibold uppercase tracking-[0.18em] text-primary">
+                <span className="h-px w-6 bg-gold" /> Mission
+              </p>
+              <p className="mt-4 font-display text-[19px] font-medium leading-snug tracking-tight sm:text-[21px]">{MISSION}</p>
+            </Reveal>
+            <Reveal index={3} className="relative aspect-[16/10] overflow-hidden rounded-[1.75rem] hairline">
+              <Photo photo={GALLERY[2]} sizes="(min-width:1024px) 40vw, 100vw" />
+              <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-ink/85 to-transparent p-5 text-[12.5px] text-ink-foreground/85">
+                {GALLERY[2].caption}
+              </div>
+            </Reveal>
+          </div>
         </div>
 
-        <Reveal index={2} className="mt-12">
-          <Carousel label="DOAS permit pipelines" autoplay={7500} slideClass="w-[88%] sm:w-[62%] lg:w-[calc(33.333%-0.834rem)]">
-            {SERVICES.map((s) => {
-              const Icon = s.icon
+        {/* values */}
+        <div className="mt-16 lg:mt-20">
+          <Reveal className="flex items-end justify-between gap-6">
+            <p className="text-[11.5px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">Core values</p>
+            <GrowLine className="max-w-[60%] flex-1" />
+          </Reveal>
+          <div className="mt-6 grid gap-px overflow-hidden rounded-3xl bg-border hairline sm:grid-cols-2 lg:grid-cols-5">
+            {VALUES.map((v, k) => {
+              const Icon = v.icon
               return (
-                <article
-                  key={s.n}
-                  className="group flex h-full select-none flex-col rounded-3xl bg-background p-7 transition-shadow duration-300 hairline hover:shadow-plaque sm:p-8"
-                >
-                  <div className="flex items-start justify-between gap-4">
-                    <span className={`grid h-14 w-14 place-items-center rounded-2xl ${s.tint}`}>
-                      <Icon className="h-6 w-6" />
-                    </span>
-                    <span className="figure text-sm text-muted-foreground/60">{s.n}</span>
-                  </div>
-
-                  <h3 className="mt-6 font-display text-[22px] font-semibold leading-tight tracking-tight">{s.title}</h3>
-                  <p className="mt-2.5 text-[13.5px] font-medium leading-relaxed text-primary">{s.who}</p>
-                  <p className="mt-3.5 flex-1 text-[15px] leading-relaxed text-muted-foreground">{s.body}</p>
-
-                  <button
-                    onClick={() => openNotify(s.intent)}
-                    className="mt-7 inline-flex h-12 items-center justify-center gap-2 rounded-xl bg-secondary px-5 text-[14.5px] font-semibold transition-colors group-hover:bg-ink group-hover:text-ink-foreground"
-                  >
-                    {s.cta}
-                    <ArrowRight className="h-4 w-4 transition-transform duration-300 group-hover:translate-x-1" />
-                  </button>
-                </article>
+                <Reveal key={v.name} index={k} className="group relative bg-card p-6 sm:p-7">
+                  <span className="absolute left-0 top-0 h-1 w-0 bg-gold transition-[width] duration-700 group-hover:w-full" aria-hidden />
+                  <span className="grid h-11 w-11 place-items-center rounded-xl bg-gold/25 text-gold-ink transition-colors group-hover:bg-gold group-hover:text-ink">
+                    <Icon className="h-5 w-5" />
+                  </span>
+                  <p className="mt-5 font-display text-[19px] font-semibold tracking-tight">{v.name}</p>
+                  <p className="mt-2 text-[14px] leading-relaxed text-muted-foreground">{v.body}</p>
+                </Reveal>
               )
             })}
-          </Carousel>
-        </Reveal>
-
-        <Reveal className="mt-10 flex flex-col gap-4 rounded-3xl bg-ink p-6 text-ink-foreground sm:flex-row sm:items-center sm:p-7">
-          <span className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-gold text-ink">
-            <ShieldCheck className="h-6 w-6" />
-          </span>
-          <p className="flex-1 text-[15px] leading-relaxed text-ink-foreground/80">
-            Complex site, large-format structure, or a policy question? Request a meeting with the Director&rsquo;s office.
-          </p>
-          <button
-            onClick={() => openNotify("meeting")}
-            className="inline-flex h-12 shrink-0 items-center justify-center gap-2 rounded-xl bg-gold px-6 text-sm font-semibold text-ink transition-transform hover:brightness-105 active:scale-[0.98]"
-          >
-            Request a meeting <ArrowRight className="h-4 w-4" />
-          </button>
-        </Reveal>
+          </div>
+        </div>
       </div>
     </section>
   )
 }
 
 /* ------------------------------------------------------------------ */
-/* Leadership                                                           */
+/* Director                                                             */
 /* ------------------------------------------------------------------ */
 
-function Leadership() {
-  const portrait: Photo = {
-    src: "/photos/director.jpg",
-    alt: "The Acting Director, Department of Outdoor Advertisement and Signage",
+function Director() {
+  const portrait: PhotoT = {
+    src: DIRECTOR.portrait,
+    alt: `${DIRECTOR.name}, ${DIRECTOR.title}, Department of Outdoor Advertisement and Signage`,
     caption: "",
     place: "",
   }
   return (
-    <section className="relative overflow-hidden bg-ink py-20 text-ink-foreground lg:py-28">
+    <section id="director" className="relative scroll-mt-28 overflow-hidden bg-ink py-20 text-ink-foreground lg:py-28">
       <div className="absolute inset-0 grid-paper opacity-[0.07] [--border:48_30%_96%]" aria-hidden />
       <div className="absolute -right-24 top-0 h-96 w-96 rounded-full bg-gold opacity-20 blur-[110px]" aria-hidden />
       <div className="absolute -left-24 bottom-0 h-80 w-80 rounded-full bg-sky opacity-15 blur-[110px]" aria-hidden />
@@ -860,30 +737,37 @@ function Leadership() {
           <div className="relative mx-auto aspect-[4/5] max-w-md overflow-hidden rounded-[2rem]">
             <Photo photo={portrait} sizes="(min-width:1024px) 40vw, 90vw" />
             <div className="absolute inset-0 ring-1 ring-inset ring-white/10" aria-hidden />
-            <div className="absolute bottom-5 left-5 right-5 rounded-2xl bg-ink/80 p-4 backdrop-blur">
-              <p className="font-display text-[17px] font-semibold">Dr. Sunday Azaki Kachiwoyi</p>
-              <p className="text-[12.5px] text-ink-foreground/65">Director, DOAS · FCT Administration</p>
-            </div>
+           
           </div>
         </Reveal>
 
         <div className="lg:col-span-7">
           <Reveal>
-            <SectionLabel n="03" label="From the Director's office" light />
+            <SectionLabel n="02" label="From the Overseeing Director" light />
           </Reveal>
           <Reveal index={1}>
             <Quote className="mt-6 h-9 w-9 text-gold" aria-hidden />
-            <blockquote className="mt-4 font-display text-[1.6rem] font-medium leading-[1.3] tracking-tight text-balance sm:text-[2rem]">
-              Abuja was planned as a capital that could be read at a glance — wide avenues, clear sightlines, a skyline that
-              belongs to the city and not to whoever shouts loudest. Our work is to keep it that way, fairly, with one
-              register that every business can trust.
+            <blockquote className="mt-4 font-display text-[1.4rem] font-medium leading-[1.38] tracking-tight text-balance sm:text-[1.65rem]">
+              {DIRECTOR.welcome}
             </blockquote>
+          
           </Reveal>
-          <Reveal index={2} as="p" className="mt-7 max-w-xl text-[15.5px] leading-relaxed text-ink-foreground/70">
-            The department operates across six desks — Customer Service, the Director&rsquo;s office, Business Development,
-            Finance, Planning &amp; Development and Monitoring &amp; Enforcement — with every decision on a file written to the
-            record, so that an applicant always knows where their file is and why.
+
+          <Reveal index={2} className="mt-9 border-t border-white/10 pt-7">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-ink-foreground/50">Leadership priorities</p>
+            <ul className="mt-4 flex flex-wrap gap-2">
+              {DIRECTOR.priorities.map((p) => (
+                <li
+                  key={p}
+                  className="inline-flex items-center gap-2 rounded-full border border-white/12 bg-white/[0.04] px-3.5 py-2 text-[13px] text-ink-foreground/85"
+                >
+                  <span className="h-1.5 w-1.5 rotate-45 bg-gold" aria-hidden />
+                  {p}
+                </li>
+              ))}
+            </ul>
           </Reveal>
+
           <Reveal index={3} className="mt-8 flex flex-wrap gap-3">
             <button
               onClick={() => openNotify("meeting")}
@@ -892,12 +776,357 @@ function Leadership() {
               Request a meeting <ArrowRight className="h-4 w-4" />
             </button>
             <a
-              href="#mandate"
+              href="#divisions"
               className="inline-flex h-12 items-center gap-2 rounded-xl border border-white/15 bg-white/[0.06] px-6 text-sm font-semibold backdrop-blur transition-colors hover:bg-white/10"
             >
-              Read the mandate
+              Divisions &amp; units
             </a>
           </Reveal>
+        </div>
+      </div>
+    </section>
+  )
+}
+
+/* ------------------------------------------------------------------ */
+/* Notices & circulars                                                  */
+/* ------------------------------------------------------------------ */
+
+type NoticeState = { tone: Tone; label: string; archived: boolean }
+
+/** Time-boxed exercises archive themselves after their deadline; standing orders stay in force. */
+function noticeState(n: Notice, now: number | null): NoticeState | null {
+  if (n.closes) {
+    if (now === null) return null
+    const opens = n.opens ? Date.parse(n.opens) : -Infinity
+    const closes = Date.parse(n.closes)
+    if (now < opens) return { tone: "move", label: "Opens soon", archived: false }
+    if (now <= closes) {
+      const days = Math.ceil((closes - now) / 86_400_000)
+      return { tone: "clear", label: days <= 1 ? "Open · closes today" : `Open · ${days} days left`, archived: false }
+    }
+    return { tone: "idle", label: "Closed", archived: true }
+  }
+  return { tone: n.tone ?? "move", label: n.category === "Circular" || n.category === "Standard" ? "Current" : "In force", archived: false }
+}
+
+function Notices() {
+  const [now, setNow] = useState<number | null>(null)
+  const [tab, setTab] = useState<"active" | "archive">("active")
+
+  useEffect(() => {
+    setNow(Date.now())
+    const id = window.setInterval(() => setNow(Date.now()), 60_000)
+    return () => window.clearInterval(id)
+  }, [])
+
+  const rows = useMemo(
+    () =>
+      NOTICES.map((n) => ({ n, s: noticeState(n, now) })).filter((r): r is { n: Notice; s: NoticeState } => r.s !== null),
+    [now],
+  )
+  const active = rows.filter((r) => !r.s.archived)
+  const archive = rows.filter((r) => r.s.archived)
+  const featured = tab === "active" ? active.find((r) => r.n.id === "stop-work") : undefined
+  const list = (tab === "active" ? active : archive).filter((r) => r !== featured)
+
+  return (
+    <section id="notices" className="scroll-mt-28 py-20 lg:py-28">
+      <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+        <div className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
+          <Reveal className="max-w-2xl">
+            <SectionLabel n="03" label="Notices & circulars" />
+            <h2 className={`mt-5 ${H2}`}>What is in force right now.</h2>
+            <p className="mt-4 text-[16.5px] leading-relaxed text-muted-foreground">
+              Orders, circulars and exercises issued to practitioners and the public. Deadlines are in West Africa Time (WAT);
+              closed exercises move to the archive with their dates preserved.
+            </p>
+          </Reveal>
+
+          <Reveal index={1}>
+            <div role="tablist" aria-label="Notice status" className="inline-flex rounded-2xl bg-secondary p-1">
+              {(
+                [
+                  { id: "active", label: "Active", n: active.length },
+                  { id: "archive", label: "Archive", n: archive.length },
+                ] as const
+              ).map((t) => (
+                <button
+                  key={t.id}
+                  role="tab"
+                  aria-selected={tab === t.id}
+                  onClick={() => setTab(t.id)}
+                  className={`inline-flex h-10 items-center gap-2 rounded-xl px-4 text-[14px] font-semibold transition-all ${
+                    tab === t.id ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  {t.label}
+                  <span
+                    className={`figure grid h-5 min-w-5 place-items-center rounded-full px-1.5 text-[11px] ${
+                      tab === t.id ? "bg-ink text-ink-foreground" : "bg-background"
+                    }`}
+                  >
+                    {t.n}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </Reveal>
+        </div>
+
+        <div className="mt-12 grid gap-8 lg:grid-cols-12">
+          <div key={tab} className="fade-in space-y-4 lg:col-span-8">
+            {featured && (
+              <article className="relative overflow-hidden rounded-3xl bg-ink p-7 text-ink-foreground sm:p-9">
+                <div className="absolute -right-20 -top-24 h-72 w-72 rounded-full bg-[hsl(var(--state-stop))] opacity-25 blur-[90px]" aria-hidden />
+                <div className="relative">
+                  <div className="flex flex-wrap items-center gap-2.5">
+                    <span className="inline-flex items-center gap-1.5 rounded-full bg-[hsl(var(--state-stop))] px-2.5 py-1 text-[11.5px] font-semibold leading-none text-white">
+                      <span className="relative h-1.5 w-1.5 rounded-full bg-white ping-dot" />
+                      {featured.s.label}
+                    </span>
+                    <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-ink-foreground/55">
+                      {featured.n.category}
+                    </span>
+                  </div>
+                  <h3 className="mt-4 font-display text-[24px] font-semibold leading-tight tracking-tight sm:text-[28px]">
+                    {featured.n.title}
+                  </h3>
+                  <p className="mt-1.5 text-[12.5px] text-ink-foreground/55">{featured.n.source}</p>
+                  <p className="mt-5 text-[16px] leading-relaxed text-ink-foreground/85">{featured.n.summary}</p>
+                  <ul className="mt-5 space-y-2.5">
+                    {featured.n.points.map((p) => (
+                      <li key={p} className="flex gap-3 text-[14.5px] leading-relaxed text-ink-foreground/75">
+                        <span className="mt-2 h-1.5 w-1.5 shrink-0 rotate-45 bg-gold" aria-hidden />
+                        {p}
+                      </li>
+                    ))}
+                  </ul>
+                  <button
+                    onClick={() => openNotify("site")}
+                    className="mt-7 inline-flex h-11 items-center gap-2 rounded-xl bg-gold px-5 text-[14px] font-semibold text-ink transition-transform hover:brightness-105 active:scale-[0.98]"
+                  >
+                    Ask about a written exemption <ArrowRight className="h-4 w-4" />
+                  </button>
+                </div>
+              </article>
+            )}
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              {list.map(({ n, s }) => (
+                <article key={n.id} className="relative flex flex-col overflow-hidden rounded-3xl bg-card p-6 hairline">
+                  <span className={`absolute inset-y-0 left-0 w-1 ${TONES[s.tone].bar}`} aria-hidden />
+                  <div className="flex flex-wrap items-center gap-2.5">
+                    <StatusChip tone={s.tone} label={s.label} />
+                    <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">{n.category}</span>
+                  </div>
+                  <h3 className="mt-4 font-display text-[19px] font-semibold leading-snug tracking-tight">{n.title}</h3>
+                  <p className="mt-1 text-[12.5px] text-muted-foreground">{n.source}</p>
+                  <p className="mt-3 text-[14.5px] leading-relaxed text-muted-foreground">{n.summary}</p>
+                  {n.points.length > 0 && (
+                    <ul className="mt-3 space-y-1.5">
+                      {n.points.map((p) => (
+                        <li key={p} className="flex gap-2.5 text-[13.5px] leading-relaxed">
+                          <span className="mt-[7px] h-1.5 w-1.5 shrink-0 rotate-45 bg-gold" aria-hidden />
+                          {p}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  <div className="mt-auto pt-5">
+                    {n.window && (
+                      <p className="flex items-center gap-2 rounded-xl bg-secondary/70 px-3.5 py-2.5 text-[13px] font-medium tnum">
+                        <CalendarClock className="h-4 w-4 shrink-0 text-primary" />
+                        {n.window}
+                      </p>
+                    )}
+                    {s.archived && (
+                      <p className="mt-3 text-[12.5px] leading-relaxed text-muted-foreground">
+                        Missed this window? Contact the Customer Service Unit with your documents.
+                      </p>
+                    )}
+                    {n.link && (
+                      <a
+                        href={n.link.href}
+                        className="mt-3 inline-flex items-center gap-1.5 text-[14px] font-semibold text-primary transition-colors hover:text-foreground"
+                      >
+                        {n.link.label} <ArrowRight className="h-4 w-4" />
+                      </a>
+                    )}
+                  </div>
+                </article>
+              ))}
+            </div>
+
+            {tab === "archive" && archive.length === 0 && (
+              <p className="rounded-3xl bg-card p-8 text-center text-[15px] text-muted-foreground hairline">
+                No archived notices yet.
+              </p>
+            )}
+          </div>
+
+          {/* forms & downloads */}
+          <aside className="space-y-4 lg:col-span-4">
+            <Reveal className="rounded-3xl bg-card p-6 hairline lg:sticky lg:top-28">
+              <p className="font-display text-[19px] font-semibold tracking-tight">Forms &amp; downloads</p>
+              <p className="mt-1 text-[13.5px] text-muted-foreground">Official versions only. Forms not yet online are issued at CSU.</p>
+              <ul className="mt-5 divide-y divide-border">
+                {DOWNLOADS.map((d) => (
+                  <li key={d.title} className="flex items-start gap-3 py-3.5">
+                    <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-secondary">
+                      <FileText className="h-4 w-4" />
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-[14px] font-medium leading-snug">{d.title}</p>
+                      <p className="text-[12px] text-muted-foreground">{d.note}</p>
+                    </div>
+                    {d.href ? (
+                      <a
+                        href={d.href}
+                        className="grid h-9 w-9 shrink-0 place-items-center rounded-lg transition-colors hover:bg-ink hover:text-ink-foreground hairline"
+                        aria-label={`Download ${d.title}`}
+                      >
+                        <Download className="h-4 w-4" />
+                      </a>
+                    ) : (
+                      <span className="mt-1 shrink-0 rounded-full bg-secondary px-2 py-1 text-[10.5px] font-semibold uppercase tracking-wide text-muted-foreground">
+                        At CSU
+                      </span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+              <button
+                onClick={() => openNotify("general")}
+                className="sheen mt-5 inline-flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-ink text-[14px] font-semibold text-ink-foreground transition-transform active:scale-[0.98]"
+              >
+                <Mail className="h-4 w-4" /> Get new notices by email
+              </button>
+            </Reveal>
+          </aside>
+        </div>
+      </div>
+    </section>
+  )
+}
+
+/* ------------------------------------------------------------------ */
+/* Services                                                             */
+/* ------------------------------------------------------------------ */
+
+function Services() {
+  const [aud, setAud] = useState<Audience | "all">("all")
+  const list = aud === "all" ? SERVICES : SERVICES.filter((s) => s.audience === aud)
+  const tabs = [
+    { id: "all" as const, label: "All services", n: SERVICES.length },
+    ...AUDIENCES.map((a) => ({ id: a.id, label: a.label, n: SERVICES.filter((s) => s.audience === a.id).length })),
+  ]
+  const blurb = aud === "all" ? null : AUDIENCES.find((a) => a.id === aud)?.blurb
+
+  return (
+    <section id="services" className="scroll-mt-28 border-y border-border bg-card py-20 lg:py-28">
+      <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+        <Reveal className="max-w-3xl">
+          <SectionLabel n="04" label="Services" />
+          <h2 className={`mt-5 ${H2}`}>Find the right service.</h2>
+          <p className="mt-4 text-[16.5px] leading-relaxed text-muted-foreground">
+            Every submission goes through the Customer Service Unit in Jahi. Online filing is being prepared — leave your email on
+            any service and we will write to you the day it opens.
+          </p>
+        </Reveal>
+
+        <Reveal index={1} className="mt-10">
+          <div role="tablist" aria-label="Filter services" className="no-scrollbar -mx-4 flex gap-2 overflow-x-auto px-4 pb-1 sm:mx-0 sm:flex-wrap sm:px-0">
+            {tabs.map((t) => (
+              <button
+                key={t.id}
+                role="tab"
+                aria-selected={aud === t.id}
+                onClick={() => setAud(t.id)}
+                className={`inline-flex h-11 shrink-0 items-center gap-2 rounded-full px-4 text-[14px] font-semibold transition-all ${
+                  aud === t.id ? "bg-ink text-ink-foreground" : "bg-background text-foreground/75 hairline hover:text-foreground"
+                }`}
+              >
+                {t.label}
+                <span className={`figure text-[12px] ${aud === t.id ? "text-gold" : "text-muted-foreground"}`}>{t.n}</span>
+              </button>
+            ))}
+          </div>
+          {blurb && <p className="fade-in mt-4 text-[14.5px] text-muted-foreground">{blurb}</p>}
+        </Reveal>
+
+        <div key={aud} className="fade-in mt-8 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+          {list.map((s) => {
+            const Icon = s.icon
+            return (
+              <article
+                key={s.title}
+                className="group flex h-full flex-col rounded-3xl bg-background p-6 transition-all duration-300 hairline hover:-translate-y-0.5 hover:shadow-[0_24px_50px_-30px_hsl(101_50%_6%/.45)] sm:p-7"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <span className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-secondary transition-colors duration-300 group-hover:bg-gold group-hover:text-ink">
+                    <Icon className="h-5 w-5" />
+                  </span>
+                  <StatusChip tone={s.status.tone} label={s.status.label} />
+                </div>
+                <h3 className="mt-5 font-display text-[19px] font-semibold leading-snug tracking-tight">{s.title}</h3>
+                <p className="mt-2.5 text-[14.5px] leading-relaxed text-muted-foreground">{s.body}</p>
+                <ul className="mt-4 space-y-1.5">
+                  {s.points.map((p) => (
+                    <li key={p} className="flex gap-2 text-[13.5px] leading-snug">
+                      <Check className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[hsl(var(--state-clear))]" strokeWidth={3} />
+                      {p}
+                    </li>
+                  ))}
+                </ul>
+                <div className="mt-auto pt-6">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">Handled by</p>
+                  <p className="mt-0.5 text-[13.5px] font-medium text-primary">{s.unit}</p>
+                  <button
+                    onClick={() => openNotify(s.intent)}
+                    className="mt-4 inline-flex h-11 w-full items-center justify-between gap-2 rounded-xl bg-secondary px-4 text-left text-[14px] font-semibold transition-colors group-hover:bg-ink group-hover:text-ink-foreground"
+                  >
+                    {s.cta}
+                    <ArrowRight className="h-4 w-4 shrink-0 transition-transform duration-300 group-hover:translate-x-1" />
+                  </button>
+                </div>
+              </article>
+            )
+          })}
+
+          {/* help card — always completes the last row */}
+          <article className="relative flex h-full flex-col overflow-hidden rounded-3xl bg-ink p-6 text-ink-foreground sm:p-7">
+            <div className="absolute -right-16 -top-20 h-56 w-56 rounded-full bg-gold opacity-20 blur-[70px]" aria-hidden />
+            <span className="relative grid h-12 w-12 place-items-center rounded-2xl bg-gold text-ink">
+              <ShieldCheck className="h-5 w-5" />
+            </span>
+            <h3 className="relative mt-5 font-display text-[21px] font-semibold leading-snug tracking-tight">
+              Not sure which service you need?
+            </h3>
+            <p className="relative mt-2.5 text-[14.5px] leading-relaxed text-ink-foreground/70">
+              Call the Customer Service Unit. For a complex site, a large-format structure or a policy question, request a
+              meeting with the Office of the Overseeing Director.
+            </p>
+            <div className="relative mt-5 flex flex-col gap-1.5">
+              {CONTACT.phones.map((p) => (
+                <a
+                  key={p.tel}
+                  href={`tel:${p.tel}`}
+                  className="inline-flex items-center gap-2.5 text-[15px] font-semibold tnum text-ink-foreground transition-colors hover:text-gold"
+                >
+                  <Phone className="h-4 w-4 text-gold" /> {p.display}
+                </a>
+              ))}
+            </div>
+            <div className="relative mt-auto pt-6">
+              <button
+                onClick={() => openNotify("meeting")}
+                className="inline-flex h-11 w-full items-center justify-between gap-2 rounded-xl bg-gold px-4 text-[14px] font-semibold text-ink transition-transform hover:brightness-105 active:scale-[0.98]"
+              >
+                Request a meeting <ArrowRight className="h-4 w-4" />
+              </button>
+            </div>
+          </article>
         </div>
       </div>
     </section>
@@ -916,10 +1145,8 @@ function Process() {
       <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
         <div className="grid items-end gap-8 lg:grid-cols-12">
           <Reveal className="lg:col-span-7">
-            <SectionLabel n="04" label="How a first-party file moves" />
-            <h2 className="mt-5 font-display text-[2rem] font-semibold leading-[1.08] tracking-tight text-balance sm:text-4xl lg:text-[2.9rem]">
-              Five desks. One reference number. Nothing lost.
-            </h2>
+            <SectionLabel n="05" label="How an application moves" />
+            <h2 className={`mt-5 ${H2}`}>One file. Every step on the record.</h2>
           </Reveal>
           <Reveal index={1} className="lg:col-span-5 lg:text-right">
             <button
@@ -935,7 +1162,7 @@ function Process() {
           <div className="absolute left-0 right-0 top-[18px] hidden lg:block">
             <GrowLine />
           </div>
-          <ol ref={ref} className="grid gap-9 lg:grid-cols-5 lg:gap-6">
+          <ol ref={ref} className="grid gap-9 lg:grid-cols-6 lg:gap-6">
             {PROCESS.map((p, k) => (
               <li
                 key={p.step}
@@ -953,21 +1180,19 @@ function Process() {
                 </div>
                 <div className="lg:mt-6">
                   <p className="text-[11px] font-semibold uppercase tracking-[0.15em] text-primary">{p.desk}</p>
-                  <h3 className="mt-1.5 font-display text-[18px] font-semibold tracking-tight">{p.step}</h3>
+                  <h3 className="mt-1.5 font-display text-[18px] font-semibold leading-snug tracking-tight">{p.step}</h3>
                   <p className="mt-2 text-[14px] leading-relaxed text-muted-foreground">{p.note}</p>
                 </div>
-                {k < PROCESS.length - 1 && <span className="absolute bottom-[-2.25rem] left-[17px] top-9 w-px bg-border lg:hidden" aria-hidden />}
+                {k < PROCESS.length - 1 && (
+                  <span className="absolute bottom-[-2.25rem] left-[17px] top-9 w-px bg-border lg:hidden" aria-hidden />
+                )}
               </li>
             ))}
           </ol>
         </div>
 
         <Reveal index={2} className="mt-14 grid gap-px overflow-hidden rounded-3xl bg-border text-[14px] hairline sm:grid-cols-3">
-          {[
-            { t: "Returned, not rejected", d: "If a desk sends a file back, the reason is written on the record so you can fix it and resubmit." },
-            { t: "Pay against an invoice", d: "Finance issues your assessment after the site visit. Never pay a fee that is not on a DOAS invoice." },
-            { t: "Third-party sites", d: "Billboard files route through Monitoring and Planning reports instead, and are registered by the CSU on approval." },
-          ].map((c) => (
+          {GUARDRAILS.map((c) => (
             <div key={c.t} className="bg-card p-6">
               <p className="flex items-center gap-2 font-semibold">
                 <span className="h-1.5 w-1.5 rotate-45 bg-gold" aria-hidden />
@@ -983,42 +1208,89 @@ function Process() {
 }
 
 /* ------------------------------------------------------------------ */
-/* Checklist — before you file                                          */
+/* Prepare — checklist + payments                                       */
 /* ------------------------------------------------------------------ */
 
-function Checklist() {
+function Prepare() {
   return (
     <section className="border-y border-border bg-card py-20 lg:py-28">
       <div className="mx-auto grid max-w-7xl gap-10 px-4 sm:px-6 lg:grid-cols-12 lg:gap-16 lg:px-8">
-        <Reveal className="lg:col-span-4">
-          <SectionLabel n="05" label="Before you file" />
-          <h2 className="mt-5 font-display text-[2rem] font-semibold leading-[1.08] tracking-tight text-balance sm:text-4xl">
-            Six things the Customer Service Unit will ask for.
-          </h2>
-          <p className="mt-4 text-[15.5px] leading-relaxed text-muted-foreground">
-            A complete file is screened in one visit. Bring these to the Jahi Head Office, or have them ready as scans for the
-            day online filing opens.
-          </p>
-          <a
-            href="/downloads/doas-signage-guidelines.pdf"
-            className="mt-7 inline-flex h-12 items-center gap-2 rounded-xl bg-ink px-5 text-sm font-semibold text-ink-foreground transition-transform active:scale-[0.98]"
-          >
-            <Download className="h-4 w-4" /> Full checklist (PDF)
-          </a>
-        </Reveal>
+        <div className="lg:col-span-5">
+          <Reveal>
+            <SectionLabel n="06" label="Before you visit CSU" />
+            <h2 className="mt-5 font-display text-[2rem] font-semibold leading-[1.08] tracking-tight text-balance sm:text-4xl">
+              What to bring for a billboard site submission.
+            </h2>
+            <p className="mt-4 text-[15.5px] leading-relaxed text-muted-foreground">
+              One billboard site per submission form. The Customer Service Unit records what you hand in and gives you an
+              acknowledgement copy with a reference number.
+            </p>
+          </Reveal>
 
-        <div className="grid gap-4 sm:grid-cols-2 lg:col-span-8">
-          {CHECKLIST.map((c, k) => (
-            <Reveal key={c.t} index={k} className="group flex gap-4 rounded-2xl bg-background p-5 transition-shadow hairline hover:shadow-plaque">
-              <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-gold/25 text-gold-ink transition-colors group-hover:bg-gold group-hover:text-ink">
-                <Check className="h-4 w-4" strokeWidth={3} />
-              </span>
-              <div>
-                <p className="font-display text-[17px] font-semibold tracking-tight">{c.t}</p>
-                <p className="mt-1 text-[14px] leading-relaxed text-muted-foreground">{c.d}</p>
+          <Reveal index={1} className="mt-8 overflow-hidden rounded-3xl bg-ink p-6 text-ink-foreground sm:p-7">
+            <p className="flex items-center gap-2 text-[11.5px] font-semibold uppercase tracking-[0.16em] text-gold">
+              <span className="h-px w-6 bg-gold" /> Fees &amp; payments
+            </p>
+            <dl className="mt-5 space-y-4 text-[14px]">
+              <div className="flex items-start justify-between gap-4 border-b border-white/10 pb-4">
+                <div>
+                  <dt className="font-semibold">Revalidation certification</dt>
+                  <dd className="mt-0.5 text-[12.5px] text-ink-foreground/60">Per successful practitioner · Remita · after written notice</dd>
+                </div>
+                <dd className="figure shrink-0 text-[18px] font-semibold text-gold">₦1,000,000</dd>
               </div>
-            </Reveal>
-          ))}
+              <div className="flex items-start justify-between gap-4 border-b border-white/10 pb-4">
+                <div>
+                  <dt className="font-semibold">Newly approved billboard sites</dt>
+                  <dd className="mt-0.5 text-[12.5px] text-ink-foreground/60">Bills on existing or old structures remain payable</dd>
+                </div>
+                <dd className="shrink-0">
+                  <StatusChip tone="wait" label="Suspended" dark />
+                </dd>
+              </div>
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <dt className="font-semibold">All other charges</dt>
+                  <dd className="mt-0.5 text-[12.5px] text-ink-foreground/60">As stated on your official DOAS bill — never to an individual</dd>
+                </div>
+                <dd className="shrink-0 text-[12.5px] font-semibold text-ink-foreground/70">On your bill</dd>
+              </div>
+            </dl>
+            <button
+              onClick={() => openNotify("billing")}
+              className="mt-6 inline-flex items-center gap-2 text-[14px] font-semibold text-gold transition-colors hover:text-ink-foreground"
+            >
+              Query a bill or verify a payment <ArrowRight className="h-4 w-4" />
+            </button>
+          </Reveal>
+        </div>
+
+        <div className="lg:col-span-7">
+          <div className="grid gap-4 sm:grid-cols-2">
+            {CHECKLIST.map((c, k) => (
+              <Reveal
+                key={c.t}
+                index={k}
+                className="group flex gap-4 rounded-2xl bg-background p-5 transition-shadow hairline hover:shadow-[0_20px_40px_-28px_hsl(101_50%_6%/.45)]"
+              >
+                <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-gold/25 text-gold-ink transition-colors group-hover:bg-gold group-hover:text-ink">
+                  <Check className="h-4 w-4" strokeWidth={3} />
+                </span>
+                <div>
+                  <p className="font-display text-[17px] font-semibold tracking-tight">{c.t}</p>
+                  <p className="mt-1 text-[14px] leading-relaxed text-muted-foreground">{c.d}</p>
+                </div>
+              </Reveal>
+            ))}
+          </div>
+          <Reveal index={3} className="mt-4 flex gap-4 rounded-2xl bg-[hsl(var(--state-wait-soft))] p-5 text-[14px] leading-relaxed">
+            <ShieldAlert className="mt-0.5 h-5 w-5 shrink-0 text-[hsl(var(--state-wait))]" />
+            <p>
+              <span className="font-semibold">Before any construction or maintenance</span> you also need a Setting Out
+              Certificate and every other applicable written approval. While the stop-work order is in force, new structural
+              work needs express written clearance from DOAS.
+            </p>
+          </Reveal>
         </div>
       </div>
     </section>
@@ -1026,30 +1298,176 @@ function Checklist() {
 }
 
 /* ------------------------------------------------------------------ */
-/* Gallery — photo carousel                                             */
+/* Safety & standards                                                   */
+/* ------------------------------------------------------------------ */
+
+function SpacingChart() {
+  const { ref, inView } = useInView<HTMLDivElement>({ threshold: 0.25 })
+  const ticks = [0, 250, 500, 750, 1000]
+  return (
+    <div ref={ref} className="h-full rounded-3xl bg-card p-6 hairline sm:p-8">
+      <p className="font-display text-[20px] font-semibold tracking-tight">Minimum board-to-board spacing</p>
+      <p className="mt-1 text-[13.5px] text-muted-foreground">New structures · distance between boards of the same type</p>
+
+      <ul className="mt-7 space-y-3.5" aria-label="Minimum spacing by billboard type">
+        {SPACING.map((s, k) => (
+          <li key={s.type} className="grid grid-cols-[7.25rem_1fr_3.5rem] items-center gap-3 sm:grid-cols-[10rem_1fr_4rem]">
+            <span className="text-[13.5px] font-medium leading-tight">
+              {s.type}
+              {s.note && <span className="block text-[11px] font-normal text-muted-foreground">{s.note}</span>}
+            </span>
+            <span className="relative h-3 overflow-hidden rounded-full bg-muted" aria-hidden>
+              <span
+                className={`absolute inset-y-0 left-0 origin-left rounded-full ${
+                  s.note ? "bg-primary/35" : s.m >= 1000 ? "bg-ink dark:bg-gold" : "bg-primary"
+                }`}
+                style={{
+                  width: `${(s.m / 1000) * 100}%`,
+                  transform: inView ? "scaleX(1)" : "scaleX(0)",
+                  transition: `transform 1s cubic-bezier(.65,0,.35,1) ${k * 70}ms`,
+                }}
+              />
+            </span>
+            <span className="figure text-right text-[14px] font-semibold">{s.m >= 1000 ? `${s.m / 1000} km` : `${s.m} m`}</span>
+          </li>
+        ))}
+      </ul>
+
+      <div className="mt-2 grid grid-cols-[7.25rem_1fr_3.5rem] gap-3 sm:grid-cols-[10rem_1fr_4rem]" aria-hidden>
+        <span />
+        <div className="relative h-5">
+          {ticks.map((t) => (
+            <span
+              key={t}
+              className="figure absolute top-1 -translate-x-1/2 whitespace-nowrap text-[10.5px] text-muted-foreground/70 first:translate-x-0 last:-translate-x-full"
+              style={{ left: `${(t / 1000) * 100}%` }}
+            >
+              {t === 1000 ? "1 km" : t}
+            </span>
+          ))}
+        </div>
+        <span />
+      </div>
+
+      <p className="mt-5 border-t border-border pt-4 text-[12.5px] leading-relaxed text-muted-foreground">
+        Stricter site-specific directions apply where issued. Meeting the minimum does not by itself make a site approved.
+      </p>
+    </div>
+  )
+}
+
+function Standards() {
+  const stats = [
+    { v: 1, s: " km", l: "Minimum spacing for gantries, eye catchers and flag poles" },
+    { v: 2, s: "", l: "Maximum alternating billboards at any junction or intersection" },
+    { v: 21, s: " days", l: "To remove a structure under high-tension lines, from the date of notice" },
+  ]
+  const groups = [
+    { icon: Ruler, t: "Siting rules", items: SITING_RULES },
+    { icon: Leaf, t: "Environmental protection", items: ENVIRONMENT_RULES },
+    { icon: HardHat, t: "Safety on site", items: SAFETY_RULES },
+  ]
+
+  return (
+    <section id="standards" className="scroll-mt-28 py-20 lg:py-28">
+      <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+        <Reveal className="max-w-3xl">
+          <SectionLabel n="07" label="Safety & standards" />
+          <h2 className={`mt-5 ${H2}`}>Built safe. Spaced right. Kept clean.</h2>
+          <p className="mt-4 text-[16.5px] leading-relaxed text-muted-foreground">
+            Every practitioner observes the DOAS Health, Safety and Environment policy during installation, maintenance, flex
+            replacement, campaign changes, dismantling and every other site activity. These are the standards adopted for the
+            FCT in September 2026.
+          </p>
+        </Reveal>
+
+        <div className="mt-12 grid gap-5 lg:grid-cols-12">
+          <Reveal className="lg:col-span-8">
+            <SpacingChart />
+          </Reveal>
+          <div className="grid gap-5 sm:grid-cols-3 lg:col-span-4 lg:grid-cols-1">
+            {stats.map((s, k) => (
+              <Reveal key={s.l} index={k + 1} className="group relative overflow-hidden rounded-3xl bg-ink p-6 text-ink-foreground">
+                <span className="mb-5 block h-1 w-10 rounded-full bg-gold transition-[width] duration-700 group-hover:w-20" aria-hidden />
+                <p className="text-[2.4rem] font-semibold leading-none tracking-tight text-gold">
+                  <Counter value={s.v} suffix={s.s} />
+                </p>
+                <p className="mt-3 text-[13.5px] leading-snug text-ink-foreground/70">{s.l}</p>
+              </Reveal>
+            ))}
+          </div>
+        </div>
+
+        <div className="mt-5 grid gap-5 md:grid-cols-3">
+          {groups.map((g, k) => {
+            const Icon = g.icon
+            return (
+              <Reveal key={g.t} index={k} className="rounded-3xl bg-card p-6 hairline sm:p-7">
+                <span className="grid h-11 w-11 place-items-center rounded-xl bg-secondary">
+                  <Icon className="h-5 w-5" />
+                </span>
+                <p className="mt-5 font-display text-[19px] font-semibold tracking-tight">{g.t}</p>
+                <ul className="mt-4 space-y-3">
+                  {g.items.map((it) => (
+                    <li key={it} className="flex gap-3 text-[14px] leading-relaxed text-muted-foreground">
+                      <span className="mt-[9px] h-1.5 w-1.5 shrink-0 rotate-45 bg-gold" aria-hidden />
+                      {it}
+                    </li>
+                  ))}
+                </ul>
+              </Reveal>
+            )
+          })}
+        </div>
+
+        <Reveal className="mt-5 flex flex-col gap-4 rounded-3xl bg-[hsl(var(--state-stop-soft))] p-6 sm:flex-row sm:items-center sm:p-7">
+          <span className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-[hsl(var(--state-stop))] text-white">
+            <ShieldAlert className="h-6 w-6" />
+          </span>
+          <p className="flex-1 text-[15px] leading-relaxed">
+            <span className="font-semibold">Seen an unsafe structure?</span> A board under high-tension lines, a loose flex, an
+            exposed skeleton or work without safety measures — report it through the official DOAS channel.
+          </p>
+          <button
+            onClick={() => openNotify("report")}
+            className="inline-flex h-12 shrink-0 items-center justify-center gap-2 rounded-xl bg-ink px-6 text-sm font-semibold text-ink-foreground transition-transform active:scale-[0.98]"
+          >
+            Report a structure <ArrowRight className="h-4 w-4" />
+          </button>
+        </Reveal>
+      </div>
+    </section>
+  )
+}
+
+/* ------------------------------------------------------------------ */
+/* Gallery                                                              */
 /* ------------------------------------------------------------------ */
 
 function Gallery() {
   return (
-    <section id="gallery" className="scroll-mt-28 py-20 lg:py-28">
+    <section id="gallery" className="scroll-mt-28 border-y border-border bg-card py-20 lg:py-28">
       <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
         <div className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
           <Reveal className="max-w-2xl">
-            <SectionLabel n="06" label="Abuja, in order" />
-            <h2 className="mt-5 font-display text-[2rem] font-semibold leading-[1.08] tracking-tight sm:text-4xl lg:text-[2.9rem]">
-              What a compliant city looks like.
-            </h2>
-            <p className="mt-4 text-[16.5px] leading-relaxed text-muted-foreground">
-              Approved structures across the territory — each one in the register, each one where the Master Plan allows it.
-            </p>
+            <SectionLabel n="08" label="Abuja, in order" />
+            <h2 className={`mt-5 ${H2}`}>What a compliant city looks like.</h2>
+          </Reveal>
+          <Reveal index={1} className="hidden shrink-0 items-center gap-2 text-[13px] text-muted-foreground lg:flex">
+            <span className="h-px w-8 bg-border" />
+            Drag, swipe or use the arrows
           </Reveal>
         </div>
 
         <Reveal index={1} className="mt-12">
-          <Carousel label="Approved signage across the FCT" autoplay={5500} slideClass="w-[86%] sm:w-[58%] lg:w-[42%]">
+          <Carousel label="Outdoor advertising across the FCT" autoplay={5500} slideClass="w-[86%] sm:w-[58%] lg:w-[42%]">
             {GALLERY.map((p) => (
               <figure key={p.src} className="group relative aspect-[4/3] select-none overflow-hidden rounded-3xl bg-ink hairline">
-                <Photo photo={p} sizes="(min-width:1024px) 42vw, 86vw" className="transition-transform duration-[1200ms] ease-out group-hover:scale-[1.04]" />
+                <Photo
+                  photo={p}
+                  sizes="(min-width:1024px) 42vw, 86vw"
+                  className="transition-transform duration-[1200ms] ease-out group-hover:scale-[1.04]"
+                />
                 <div className="absolute inset-0 bg-gradient-to-t from-ink/85 via-ink/20 to-transparent" aria-hidden />
                 <figcaption className="absolute inset-x-0 bottom-0 p-5 text-ink-foreground sm:p-6">
                   <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-gold">{p.place}</p>
@@ -1065,29 +1483,243 @@ function Gallery() {
 }
 
 /* ------------------------------------------------------------------ */
+/* Divisions & units                                                    */
+/* ------------------------------------------------------------------ */
+
+function Divisions() {
+  return (
+    <section id="divisions" className="scroll-mt-28 py-20 lg:py-28">
+      <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+        <div className="grid items-end gap-6 lg:grid-cols-12">
+          <Reveal className="lg:col-span-7">
+            <SectionLabel n="09" label="Divisions & units" />
+            <h2 className={`mt-5 ${H2}`}>Who does what at DOAS.</h2>
+          </Reveal>
+          <Reveal index={1} as="p" className="text-[15.5px] leading-relaxed text-muted-foreground lg:col-span-5">
+            Reach any division through the Customer Service Unit — the official reception and enquiry point — rather than
+            individual officers or intermediaries.
+          </Reveal>
+        </div>
+
+        <div className="mt-12 grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+          {DIVISIONS.map((d, k) => {
+            const Icon = d.icon
+            const isCsu = d.short === "CSU"
+            return (
+              <Reveal
+                key={d.name}
+                index={k % 4}
+                className={`group relative flex flex-col rounded-3xl p-6 transition-all duration-300 hover:-translate-y-0.5 ${
+                  isCsu ? "bg-ink text-ink-foreground" : "bg-card hairline hover:shadow-[0_24px_50px_-30px_hsl(101_50%_6%/.45)]"
+                }`}
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <span
+                    className={`grid h-11 w-11 place-items-center rounded-xl transition-colors ${
+                      isCsu ? "bg-gold text-ink" : "bg-secondary group-hover:bg-gold group-hover:text-ink"
+                    }`}
+                  >
+                    <Icon className="h-5 w-5" />
+                  </span>
+                  {d.short && (
+                    <span
+                      className={`figure rounded-full px-2.5 py-1 text-[11px] font-semibold ${
+                        isCsu ? "bg-white/10 text-gold" : "bg-secondary text-muted-foreground"
+                      }`}
+                    >
+                      {d.short}
+                    </span>
+                  )}
+                </div>
+                <p className="mt-5 font-display text-[17px] font-semibold leading-snug tracking-tight">{d.name}</p>
+                <p className={`mt-2 text-[13.5px] leading-relaxed ${isCsu ? "text-ink-foreground/70" : "text-muted-foreground"}`}>
+                  {d.body}
+                </p>
+                {isCsu && (
+                  <a href="#contact" className="mt-4 inline-flex items-center gap-1.5 text-[13.5px] font-semibold text-gold">
+                    Start here <ArrowRight className="h-4 w-4" />
+                  </a>
+                )}
+              </Reveal>
+            )
+          })}
+        </div>
+      </div>
+    </section>
+  )
+}
+
+/* ------------------------------------------------------------------ */
+/* Digital register — in development                                    */
+/* ------------------------------------------------------------------ */
+
+const QR_N = 21
+const QR_CELLS: [number, number][] = (() => {
+  let seed = 20260831
+  const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647
+  const finder = (x: number, y: number) =>
+    (x < 8 && y < 8) || (x >= QR_N - 8 && y < 8) || (x < 8 && y >= QR_N - 8)
+  const out: [number, number][] = []
+  for (let y = 0; y < QR_N; y++) for (let x = 0; x < QR_N; x++) if (!finder(x, y) && rnd() > 0.5) out.push([x, y])
+  return out
+})()
+
+function QrMock() {
+  const corners: [number, number][] = [
+    [0, 0],
+    [QR_N - 7, 0],
+    [0, QR_N - 7],
+  ]
+  return (
+    <svg viewBox={`-1 -1 ${QR_N + 2} ${QR_N + 2}`} className="h-full w-full" shapeRendering="crispEdges" aria-hidden>
+      <rect x={-1} y={-1} width={QR_N + 2} height={QR_N + 2} fill="white" rx={1} />
+      {corners.map(([x, y]) => (
+        <g key={`${x}-${y}`}>
+          <rect x={x} y={y} width={7} height={7} fill="hsl(101 89% 4%)" />
+          <rect x={x + 1} y={y + 1} width={5} height={5} fill="white" />
+          <rect x={x + 2} y={y + 2} width={3} height={3} fill="hsl(101 89% 4%)" />
+        </g>
+      ))}
+      {QR_CELLS.map(([x, y]) => (
+        <rect key={`${x}.${y}`} x={x} y={y} width={1} height={1} fill="hsl(101 89% 4%)" />
+      ))}
+    </svg>
+  )
+}
+
+function Register() {
+  return (
+    <section className="relative overflow-hidden border-y border-border bg-card py-20 lg:py-28">
+      <div className="absolute inset-0 dot-grid opacity-60 [mask-image:radial-gradient(ellipse_at_80%_50%,black,transparent_70%)]" aria-hidden />
+      <div className="relative mx-auto grid max-w-7xl items-center gap-12 px-4 sm:px-6 lg:grid-cols-12 lg:gap-16 lg:px-8">
+        <div className="lg:col-span-7">
+          <Reveal>
+            <SectionLabel n="10" label="Digital register" />
+            <p className="mt-5 inline-flex items-center gap-2 rounded-full bg-[hsl(var(--state-move-soft))] px-3 py-1 text-[12px] font-semibold text-[hsl(var(--state-move))]">
+              <span className="h-1.5 w-1.5 rounded-full bg-[hsl(var(--state-move))]" /> In development
+            </p>
+            <h2 className={`mt-4 ${H2}`}>Every structure, one verified record.</h2>
+            <p className="mt-4 max-w-2xl text-[16.5px] leading-relaxed text-muted-foreground">
+              Records, Statistics and Data Management is building a master database of outdoor advertising structures in the
+              FCT — so that applications, approvals, status tracking and compliance follow-up can move online.
+            </p>
+          </Reveal>
+          <div className="mt-9 grid gap-x-8 gap-y-6 sm:grid-cols-2">
+            {REGISTER_FEATURES.map((f, k) => (
+              <Reveal key={f.t} index={k} className="flex gap-3.5">
+                <span className="mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-full bg-gold/25 text-gold-ink">
+                  <Check className="h-3.5 w-3.5" strokeWidth={3} />
+                </span>
+                <div>
+                  <p className="font-semibold">{f.t}</p>
+                  <p className="mt-0.5 text-[14px] leading-relaxed text-muted-foreground">{f.d}</p>
+                </div>
+              </Reveal>
+            ))}
+          </div>
+          <Reveal index={3} className="mt-10 flex flex-wrap gap-3">
+            <button
+              onClick={() => openNotify("status")}
+              className="sheen inline-flex h-12 items-center gap-2 rounded-xl bg-ink px-6 text-sm font-semibold text-ink-foreground transition-transform active:scale-[0.98]"
+            >
+              Notify me when verification opens <ArrowRight className="h-4 w-4" />
+            </button>
+          </Reveal>
+        </div>
+
+        {/* illustrative record */}
+        <Reveal index={1} className="lg:col-span-5">
+          <div className="float relative mx-auto max-w-sm">
+            <div className="absolute -inset-6 rounded-[2.5rem] bg-gold/20 blur-2xl" aria-hidden />
+            <div className="relative overflow-hidden rounded-[1.75rem] bg-ink text-ink-foreground shadow-[0_40px_80px_-40px_hsl(101_50%_4%/.8)]">
+              <div className="h-1.5 w-full bg-gradient-to-r from-gold via-sky to-primary" aria-hidden />
+              <div className="p-6">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <span className="grid place-items-center rounded-xl bg-white p-1.5">
+                      <Logo className="h-8" />
+                    </span>
+                    <div className="leading-tight">
+                      <p className="text-[13px] font-semibold">Site record</p>
+                      <p className="text-[11px] text-ink-foreground/50">Illustrative sample</p>
+                    </div>
+                  </div>
+                  <span className="inline-flex items-center gap-1.5 rounded-full bg-[hsl(var(--state-clear))] px-2.5 py-1 text-[11px] font-semibold text-white">
+                    <Check className="h-3 w-3" strokeWidth={3.5} /> Approved
+                  </span>
+                </div>
+
+                <div className="mt-6 flex gap-5">
+                  <div className="h-28 w-28 shrink-0 overflow-hidden rounded-xl">
+                    <QrMock />
+                  </div>
+                  <dl className="grid flex-1 content-start gap-2.5 text-[12.5px]">
+                    <div>
+                      <dt className="text-ink-foreground/45">Site ID</dt>
+                      <dd className="figure font-semibold text-gold">SAMPLE-0001</dd>
+                    </div>
+                    <div>
+                      <dt className="text-ink-foreground/45">Board type</dt>
+                      <dd className="font-medium">Unipole</dd>
+                    </div>
+                    <div>
+                      <dt className="text-ink-foreground/45">Area Council</dt>
+                      <dd className="font-medium">Abuja Municipal</dd>
+                    </div>
+                  </dl>
+                </div>
+
+                <div className="mt-6 space-y-2">
+                  {["Setting Out Certificate", "Site approval", "Inspection photo"].map((r, k) => (
+                    <div key={r} className="flex items-center justify-between rounded-xl bg-white/[0.05] px-3.5 py-2.5 text-[12.5px]">
+                      <span className="flex items-center gap-2">
+                        <span className="h-1.5 w-1.5 rotate-45 bg-gold" /> {r}
+                      </span>
+                      <span className="figure text-ink-foreground/45">{k === 2 ? "dated" : "on file"}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        </Reveal>
+      </div>
+    </section>
+  )
+}
+
+/* ------------------------------------------------------------------ */
 /* FAQs                                                                 */
 /* ------------------------------------------------------------------ */
 
 function Faqs() {
   const [open, setOpen] = useState<number | null>(0)
   return (
-    <section id="faqs" className="scroll-mt-28 border-y border-border bg-card py-20 lg:py-28">
+    <section id="faqs" className="scroll-mt-28 py-20 lg:py-28">
       <div className="mx-auto grid max-w-7xl gap-10 px-4 sm:px-6 lg:grid-cols-12 lg:gap-16 lg:px-8">
         <Reveal className="lg:col-span-4">
-          <SectionLabel n="07" label="Frequently asked" />
+          <SectionLabel n="11" label="Frequently asked" />
           <h2 className="mt-5 font-display text-[2rem] font-semibold leading-[1.08] tracking-tight text-balance sm:text-4xl">
-            Straight answers on permits and regularization.
+            Straight answers for practitioners and businesses.
           </h2>
           <p className="mt-4 text-[15.5px] leading-relaxed text-muted-foreground">
-            Can&rsquo;t find your question? The DOAS Assistant is at the bottom-right of this page, or call the Customer Service
+            Can&rsquo;t find your question? Ask the DOAS Assistant at the bottom-right of this page, or call the Customer Service
             Unit during office hours.
           </p>
-          <button
-            onClick={() => window.dispatchEvent(new Event("doas:open-chat"))}
-            className="mt-7 inline-flex h-12 items-center gap-2 rounded-xl px-5 text-sm font-semibold transition-colors hairline hover:bg-secondary"
-          >
-            Ask the assistant <ArrowUpRight className="h-4 w-4" />
-          </button>
+          <div className="mt-7 flex flex-wrap gap-3">
+            <button
+              onClick={() => window.dispatchEvent(new Event("doas:open-chat"))}
+              className="inline-flex h-12 items-center gap-2 rounded-xl bg-ink px-5 text-sm font-semibold text-ink-foreground transition-transform active:scale-[0.98]"
+            >
+              Ask the assistant <ArrowUpRight className="h-4 w-4" />
+            </button>
+            <a
+              href={`tel:${CONTACT.phones[0].tel}`}
+              className="inline-flex h-12 items-center gap-2 rounded-xl px-5 text-sm font-semibold tnum transition-colors hairline hover:bg-secondary"
+            >
+              <Phone className="h-4 w-4" /> {CONTACT.phones[0].display}
+            </a>
+          </div>
         </Reveal>
 
         <div className="lg:col-span-8">
@@ -1095,7 +1727,7 @@ function Faqs() {
             {FAQS.map((f, k) => {
               const isOpen = open === k
               return (
-                <Reveal key={f.q} index={k}>
+                <Reveal key={f.q} index={k % 5}>
                   <dt>
                     <button
                       id={`faq-btn-${k}`}
@@ -1104,9 +1736,7 @@ function Faqs() {
                       aria-controls={`faq-${k}`}
                       className="group flex w-full items-start gap-5 py-6 text-left"
                     >
-                      <span className="figure mt-1 w-6 shrink-0 text-[13px] text-muted-foreground/60">
-                        {String(k + 1).padStart(2, "0")}
-                      </span>
+                      <span className="figure mt-1 w-6 shrink-0 text-[13px] text-muted-foreground/60">{String(k + 1).padStart(2, "0")}</span>
                       <span
                         className={`flex-1 font-display text-[18px] font-semibold tracking-tight transition-colors sm:text-[19px] ${
                           isOpen ? "text-primary" : "group-hover:text-primary"
@@ -1123,15 +1753,9 @@ function Faqs() {
                       </span>
                     </button>
                   </dt>
-                  <dd
-                    id={`faq-${k}`}
-                    role="region"
-                    aria-labelledby={`faq-btn-${k}`}
-                    className="disclosure"
-                    data-open={isOpen}
-                  >
+                  <dd id={`faq-${k}`} role="region" aria-labelledby={`faq-btn-${k}`} className="disclosure" data-open={isOpen}>
                     <div>
-                      <p className="pb-7 pl-11 pr-12 text-[15.5px] leading-relaxed text-muted-foreground">{f.a}</p>
+                      <p className="pb-7 pl-11 pr-4 text-[15.5px] leading-relaxed text-muted-foreground sm:pr-12">{f.a}</p>
                     </div>
                   </dd>
                 </Reveal>
@@ -1170,24 +1794,26 @@ function Newsletter() {
   }
 
   return (
-    <section className="py-20 lg:py-24">
+    <section className="pb-20 lg:pb-24">
       <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
         <Reveal className="relative overflow-hidden rounded-[2rem] bg-ink text-ink-foreground">
           <div className="absolute inset-0">
             <Photo photo={HERO_PHOTOS[1]} sizes="100vw" className="opacity-30" />
           </div>
-          <div className="absolute inset-0 bg-[linear-gradient(90deg,hsl(var(--ink)/.95)_0%,hsl(var(--ink)/.8)_55%,hsl(var(--ink)/.55)_100%)]" aria-hidden />
+          <div
+            className="absolute inset-0 bg-[linear-gradient(90deg,hsl(var(--ink)/.95)_0%,hsl(var(--ink)/.8)_55%,hsl(var(--ink)/.55)_100%)]"
+            aria-hidden
+          />
           <div className="absolute -right-20 -top-28 h-80 w-80 rounded-full bg-gold opacity-25 blur-[90px]" aria-hidden />
 
           <div className="relative grid items-center gap-9 px-6 py-12 sm:px-12 lg:grid-cols-12 lg:px-16 lg:py-16">
             <div className="lg:col-span-7">
-              <p className="text-[11.5px] font-semibold uppercase tracking-[0.18em] text-gold">Public notices</p>
+              <p className="text-[11.5px] font-semibold uppercase tracking-[0.18em] text-gold">Official notices by email</p>
               <h2 className="mt-4 font-display text-[2rem] font-semibold leading-[1.08] tracking-tight text-balance sm:text-[2.6rem]">
-                Stay compliant with FCTA advertising laws.
+                Never miss a deadline or a directive.
               </h2>
               <p className="mt-4 max-w-xl text-[15.5px] leading-relaxed text-ink-foreground/70">
-                Receive regularization exercises, guideline updates and demand-letter notices by email, the day they are
-                issued.
+                Stop-work updates, revalidation windows, fee circulars and removal notices — the day they are issued.
               </p>
             </div>
 
@@ -1213,7 +1839,7 @@ function Newsletter() {
                         setEmail(e.target.value)
                         if (state === "error") setState("idle")
                       }}
-                      placeholder="you@business.ng"
+                      placeholder="you@company.ng"
                       className="h-14 flex-1 rounded-xl bg-transparent px-4 text-[15px] text-ink-foreground outline-none placeholder:text-ink-foreground/40 focus-visible:ring-2 focus-visible:ring-gold"
                     />
                     <button
@@ -1221,24 +1847,28 @@ function Newsletter() {
                       disabled={state === "busy"}
                       className="rounded-xl bg-gold px-6 py-3.5 text-[15px] font-semibold text-ink transition hover:brightness-105 active:scale-[0.98] disabled:opacity-60"
                     >
-                      {state === "busy" ? "Saving…" : "Get updates"}
+                      {state === "busy" ? "Saving…" : "Get notices"}
                     </button>
                   </div>
                   <p className={`mt-3 text-[12.5px] ${state === "error" ? "text-gold" : "text-ink-foreground/55"}`}>
-                    {state === "error" ? "Please enter a valid email address and try again." : "Official notices only. No marketing, unsubscribe any time."}
+                    {state === "error"
+                      ? "Please enter a valid email address and try again."
+                      : "Official notices only. DOAS never requests a payment by email."}
                   </p>
                 </form>
 
                 <div
                   role="status"
-                  className={`absolute inset-0 flex items-center gap-4 transition-all duration-500 ${state === "done" ? "translate-y-0 opacity-100" : "pointer-events-none translate-y-3 opacity-0"}`}
+                  className={`absolute inset-0 flex items-center gap-4 transition-all duration-500 ${
+                    state === "done" ? "translate-y-0 opacity-100" : "pointer-events-none translate-y-3 opacity-0"
+                  }`}
                 >
                   <span className="grid h-14 w-14 shrink-0 place-items-center rounded-full bg-gold text-ink">
                     <Check className="h-6 w-6" strokeWidth={3} />
                   </span>
                   <div>
-                    <p className="font-display text-lg font-semibold">Thank you!</p>
-                    <p className="text-[14.5px] text-ink-foreground/70">Your email has been recorded safely. Notices will reach {email}.</p>
+                    <p className="font-display text-lg font-semibold">Thank you — you are subscribed.</p>
+                    <p className="text-[14.5px] text-ink-foreground/70">Official notices will reach {email || "your inbox"}.</p>
                   </div>
                 </div>
               </div>
@@ -1255,62 +1885,105 @@ function Newsletter() {
 /* ------------------------------------------------------------------ */
 
 function Contact() {
-  const MAPS_QUERY = "DOAS Katampe Road Jahi Abuja"
-  const MAPS_LINK = `https://maps.google.com/?q=${encodeURIComponent(MAPS_QUERY)}`
-  const MAPS_EMBED = `https://maps.google.com/maps?q=${encodeURIComponent(MAPS_QUERY)}&z=16&output=embed`
+  const MAPS_LINK = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(CONTACT.mapsQuery)}`
+  const MAPS_EMBED = `https://maps.google.com/maps?q=${encodeURIComponent(CONTACT.mapsQuery)}&z=16&output=embed`
 
   return (
     <section id="contact" className="scroll-mt-28 border-t border-border bg-card py-20 lg:py-28">
       <div className="mx-auto grid max-w-7xl gap-10 px-4 sm:px-6 lg:grid-cols-12 lg:gap-16 lg:px-8">
         <Reveal className="lg:col-span-5">
-          <SectionLabel n="08" label="Contact & location" />
-          <h2 className="mt-5 font-display text-[2rem] font-semibold leading-[1.08] tracking-tight sm:text-4xl">
-            Visit the Head Office in Jahi.
+          <SectionLabel n="12" label="Contact & complaints" />
+          <h2 className="mt-5 font-display text-[2rem] font-semibold leading-[1.08] tracking-tight text-balance sm:text-4xl">
+            Visit the Customer Service Unit in Jahi.
           </h2>
           <p className="mt-4 text-[15.5px] leading-relaxed text-muted-foreground">
-            Walk-in registration, enquiries on demand letters and practitioner matters are handled at the Customer Service Unit
-            during office hours.
+            Submissions, enquiries, document collection and acknowledgements are handled at the Customer Service Unit during
+            office hours.
           </p>
-          <dl className="mt-9 space-y-5">
-            {[
-              { icon: MapPin, k: "Address", v: "Katampe Road, Jahi, Abuja, FCT 900321", href: MAPS_LINK },
-              { icon: Phone, k: "Telephone", v: "+234 9 291 9181", href: "tel:+23492919181" },
-              { icon: Mail, k: "Email", v: "service@doas.abj.gov.ng", href: "mailto:service@doas.abj.gov.ng" },
-            ].map((c) => {
-              const Icon = c.icon
-              return (
-                <div key={c.k} className="group flex gap-4">
-                  <span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-secondary transition-colors group-hover:bg-gold group-hover:text-ink">
-                    <Icon className="h-[18px] w-[18px]" />
-                  </span>
-                  <div>
-                    <dt className="text-[11px] font-semibold uppercase tracking-[0.15em] text-muted-foreground">{c.k}</dt>
-                    <dd>
-                      <a
-                        href={c.href}
-                        target={c.href.startsWith("http") ? "_blank" : undefined}
-                        rel="noreferrer"
-                        className="tnum text-[15.5px] font-medium transition-colors hover:text-primary"
-                      >
-                        {c.v}
-                      </a>
-                    </dd>
-                  </div>
-                </div>
-              )
-            })}
+
+          <dl className="mt-9 space-y-6">
+            <div className="group flex gap-4">
+              <span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-secondary transition-colors group-hover:bg-gold group-hover:text-ink">
+                <MapPin className="h-[18px] w-[18px]" />
+              </span>
+              <div>
+                <dt className="text-[11px] font-semibold uppercase tracking-[0.15em] text-muted-foreground">Office address</dt>
+                <dd className="mt-1">
+                  <a href={MAPS_LINK} target="_blank" rel="noreferrer" className="text-[15.5px] font-medium leading-relaxed transition-colors hover:text-primary">
+                    {CONTACT.addressLines.map((l) => (
+                      <span key={l} className="block">
+                        {l}
+                      </span>
+                    ))}
+                  </a>
+                </dd>
+              </div>
+            </div>
+
+            <div className="group flex gap-4">
+              <span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-secondary transition-colors group-hover:bg-gold group-hover:text-ink">
+                <Phone className="h-[18px] w-[18px]" />
+              </span>
+              <div>
+                <dt className="text-[11px] font-semibold uppercase tracking-[0.15em] text-muted-foreground">Telephone</dt>
+                <dd className="mt-1 flex flex-col gap-0.5">
+                  {CONTACT.phones.map((p) => (
+                    <a key={p.tel} href={`tel:${p.tel}`} className="tnum text-[15.5px] font-medium transition-colors hover:text-primary">
+                      {p.display}
+                    </a>
+                  ))}
+                </dd>
+              </div>
+            </div>
+
+            <div className="group flex gap-4">
+              <span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-secondary transition-colors group-hover:bg-gold group-hover:text-ink">
+                <Mail className="h-[18px] w-[18px]" />
+              </span>
+              <div>
+                <dt className="text-[11px] font-semibold uppercase tracking-[0.15em] text-muted-foreground">Email</dt>
+                <dd className="mt-1">
+                  <a href={`mailto:${CONTACT.email}`} className="break-all text-[15.5px] font-medium transition-colors hover:text-primary">
+                    {CONTACT.email}
+                  </a>
+                </dd>
+              </div>
+            </div>
+
+            <div className="group flex gap-4">
+              <span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-secondary transition-colors group-hover:bg-gold group-hover:text-ink">
+                <Clock className="h-[18px] w-[18px]" />
+              </span>
+              <div>
+                <dt className="text-[11px] font-semibold uppercase tracking-[0.15em] text-muted-foreground">Office hours</dt>
+                <dd className="mt-1 text-[15.5px] font-medium">{CONTACT.hours}</dd>
+                <dd className="text-[13px] text-muted-foreground">Closed on public holidays</dd>
+              </div>
+            </div>
           </dl>
 
-          <div className="mt-9 rounded-2xl bg-secondary/70 p-5 text-[13.5px] leading-relaxed text-secondary-foreground">
-            <p className="font-semibold">Office hours</p>
-            <p className="mt-1 text-muted-foreground">Monday – Friday, 8:00am – 4:00pm. Closed on public holidays.</p>
+          <div className="mt-9 rounded-2xl bg-[hsl(var(--state-stop-soft))] p-5">
+            <p className="flex items-center gap-2 font-semibold">
+              <ShieldAlert className="h-4 w-4 text-[hsl(var(--state-stop))]" />
+              Report a problem
+            </p>
+            <p className="mt-1.5 text-[13.5px] leading-relaxed text-foreground/75">
+              Unsafe structures, suspected illegal work, disputed allocations or any improper demand by someone claiming to act for
+              DOAS. Give the exact location and a photograph.
+            </p>
+            <button
+              onClick={() => openNotify("report")}
+              className="mt-4 inline-flex h-10 items-center gap-2 rounded-xl bg-ink px-4 text-[13.5px] font-semibold text-ink-foreground transition-transform active:scale-[0.98]"
+            >
+              Ask an officer to contact me <ArrowRight className="h-4 w-4" />
+            </button>
           </div>
         </Reveal>
 
         <Reveal index={1} className="lg:col-span-7">
-          <div className="relative aspect-[4/3] overflow-hidden rounded-[1.75rem] bg-secondary hairline sm:aspect-[16/10] lg:aspect-auto lg:h-full lg:min-h-[460px]">
+          <div className="relative aspect-[4/3] overflow-hidden rounded-[1.75rem] bg-secondary hairline sm:aspect-[16/10] lg:aspect-auto lg:h-full lg:min-h-[520px]">
             <iframe
-              title="DOAS Head Office location, Katampe Road, Jahi, Abuja"
+              title={`DOAS office location — ${CONTACT.addressOneLine}`}
               src={MAPS_EMBED}
               loading="lazy"
               referrerPolicy="no-referrer-when-downgrade"
@@ -1318,15 +1991,16 @@ function Contact() {
               className="absolute inset-0 h-full w-full border-0"
             />
 
-            {/* Overlays: wrapper ignores pointer events so the map stays draggable */}
+            {/* overlays: wrapper ignores pointer events so the map stays draggable */}
             <div className="pointer-events-none absolute inset-0">
-              <div className="pointer-events-auto absolute left-5 top-5">
-                <div className="surface-raised w-max max-w-[240px] rounded-2xl px-4 py-3">
+              <div className="pointer-events-auto absolute left-4 top-4 sm:left-5 sm:top-5">
+                <div className="surface-raised w-max max-w-[270px] rounded-2xl px-4 py-3">
                   <p className="flex items-center gap-2 text-[13px] font-semibold">
                     <span className="relative h-2.5 w-2.5 rounded-full bg-gold ping-dot" />
-                    DOAS Head Office
+                    DOAS · Customer Service Unit
                   </p>
-                  <p className="mt-0.5 text-[12px] text-muted-foreground">Katampe Road, Jahi · 900321</p>
+                  <p className="mt-0.5 text-[12px] text-muted-foreground">Abuja Enterprise Agency Building</p>
+                  <p className="text-[12px] text-muted-foreground">{CONTACT.landmark}</p>
                 </div>
               </div>
 
@@ -1336,7 +2010,7 @@ function Contact() {
                 rel="noreferrer"
                 className="pointer-events-auto absolute bottom-4 right-4 inline-flex h-11 items-center gap-2 rounded-xl bg-gold px-5 text-[13.5px] font-semibold text-ink shadow-lg transition-transform hover:brightness-105 active:scale-95"
               >
-                Open in Maps <ArrowUpRight className="h-4 w-4" />
+                <Navigation className="h-4 w-4" /> Get directions
               </a>
             </div>
           </div>
@@ -1353,9 +2027,10 @@ function Contact() {
 function Footer() {
   const services: { label: string; intent: NotifyIntent }[] = [
     { label: "First-party signage", intent: "first-party" },
-    { label: "Third-party billboards", intent: "third-party" },
-    { label: "Mobile advert permits", intent: "mobile" },
-    { label: "Request a meeting", intent: "meeting" },
+    { label: "Billboard site applications", intent: "site" },
+    { label: "Practitioner revalidation", intent: "revalidation" },
+    { label: "Billing enquiries", intent: "billing" },
+    { label: "Report a structure", intent: "report" },
     { label: "Verify a permit", intent: "status" },
   ]
 
@@ -1363,18 +2038,21 @@ function Footer() {
     <footer className="bg-ink text-ink-foreground">
       <div className="h-1 w-full bg-gradient-to-r from-gold via-sky to-primary" aria-hidden />
       <div className="mx-auto max-w-7xl px-4 py-16 sm:px-6 lg:px-8">
-        <div className="grid gap-10 md:grid-cols-12">
+        <div className="grid gap-12 md:grid-cols-12">
           <div className="md:col-span-5">
-            <div className="flex items-center gap-3">
-              <Image src="/doas-logo.png" alt="" width={44} height={44} className="h-11 w-11" />
+            <div className="flex items-center gap-5">
+              <span className="grid shrink-0 place-items-center rounded-2xl bg-white p-2.5 shadow-[0_10px_30px_-12px_rgba(0,0,0,.6)]">
+                <Logo className="h-14" />
+              </span>
               <div className="leading-tight">
-                <p className="font-display text-lg font-semibold">DOAS</p>
-                <p className="text-[10.5px] uppercase tracking-[0.15em] text-ink-foreground/55">Strategizing for efficiency</p>
+                <p className="font-display text-[22px] font-semibold">DOAS</p>
+                <p className="mt-1 text-[10.5px] uppercase tracking-[0.15em] text-ink-foreground/55">Outdoor Advertisement &amp; Signage</p>
+                <p className="mt-1 text-[11.5px] text-gold/90">Strategizing for efficiency</p>
               </div>
             </div>
-            <p className="mt-6 max-w-sm text-[14px] leading-relaxed text-ink-foreground/65">
-              Department of Outdoor Advertisement and Signage, Federal Capital Territory Administration. Regulating outdoor
-              advertising for an orderly, beautiful Abuja.
+            <p className="mt-7 max-w-sm text-[14px] leading-relaxed text-ink-foreground/65">
+              Department of Outdoor Advertisement and Signage, Federal Capital Territory Administration — for a safe, orderly and
+              aesthetically pleasing outdoor advertising environment in the FCT.
             </p>
             <div className="mt-6 flex flex-wrap gap-2">
               {COUNCILS.map((c) => (
@@ -1385,7 +2063,7 @@ function Footer() {
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-8 text-[14px] md:col-span-7 sm:grid-cols-3">
+          <div className="grid grid-cols-2 gap-8 text-[14px] sm:grid-cols-3 md:col-span-7">
             <div>
               <p className="text-[11px] font-semibold uppercase tracking-[0.15em] text-gold">Services</p>
               <ul className="mt-4 space-y-2.5 text-ink-foreground/70">
@@ -1401,9 +2079,11 @@ function Footer() {
             <div>
               <p className="text-[11px] font-semibold uppercase tracking-[0.15em] text-gold">Department</p>
               <ul className="mt-4 space-y-2.5 text-ink-foreground/70">
-                <li><a href="#mandate" className="transition-colors hover:text-gold">Mandate</a></li>
-                <li><a href="#process" className="transition-colors hover:text-gold">How files move</a></li>
-                <li><a href="#gallery" className="transition-colors hover:text-gold">Gallery</a></li>
+                <li><a href="#about" className="transition-colors hover:text-gold">About DOAS</a></li>
+                <li><a href="#director" className="transition-colors hover:text-gold">Overseeing Director</a></li>
+                <li><a href="#notices" className="transition-colors hover:text-gold">Notices &amp; circulars</a></li>
+                <li><a href="#standards" className="transition-colors hover:text-gold">Safety &amp; standards</a></li>
+                <li><a href="#divisions" className="transition-colors hover:text-gold">Divisions &amp; units</a></li>
                 <li><a href="#faqs" className="transition-colors hover:text-gold">FAQs</a></li>
                 <li><Link href="/admin" className="transition-colors hover:text-gold">Staff portal</Link></li>
               </ul>
@@ -1411,9 +2091,26 @@ function Footer() {
             <div className="col-span-2 sm:col-span-1">
               <p className="text-[11px] font-semibold uppercase tracking-[0.15em] text-gold">Contact</p>
               <ul className="mt-4 space-y-2.5 text-ink-foreground/70">
-                <li>Katampe Road, Jahi,<br />Abuja, FCT 900321</li>
-                <li><a href="tel:+23492919181" className="tnum transition-colors hover:text-gold">+234 9 291 9181</a></li>
-                <li><a href="mailto:service@doas.abj.gov.ng" className="break-all transition-colors hover:text-gold">service@doas.abj.gov.ng</a></li>
+                <li className="leading-relaxed">
+                  {CONTACT.addressLines.map((l) => (
+                    <span key={l} className="block">
+                      {l}
+                    </span>
+                  ))}
+                </li>
+                {CONTACT.phones.map((p) => (
+                  <li key={p.tel}>
+                    <a href={`tel:${p.tel}`} className="tnum transition-colors hover:text-gold">
+                      {p.display}
+                    </a>
+                  </li>
+                ))}
+                <li>
+                  <a href={`mailto:${CONTACT.email}`} className="break-all transition-colors hover:text-gold">
+                    {CONTACT.email}
+                  </a>
+                </li>
+                <li className="text-ink-foreground/50">{CONTACT.hoursShort}</li>
               </ul>
             </div>
           </div>
@@ -1422,7 +2119,7 @@ function Footer() {
         <div className="mt-14 flex flex-col gap-3 border-t border-white/10 pt-7 text-[12.5px] text-ink-foreground/50 md:flex-row md:items-center md:justify-between">
           <p>
             © {new Date().getFullYear()} Department of Outdoor Advertisement and Signage (DOAS) — Federal Capital Territory
-            Administration (FCTA). All Rights Reserved.
+            Administration (FCTA). All rights reserved.
           </p>
           <p className="flex items-center gap-2">
             <span

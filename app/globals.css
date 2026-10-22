@@ -387,6 +387,35 @@
   }
 }
 
+/* Slow push-in on the active hero photo */
+@keyframes doas-kenburns {
+  from {
+    transform: scale(1.02);
+  }
+  to {
+    transform: scale(1.12) translate3d(-1.5%, -1%, 0);
+  }
+}
+
+/* Hero slide progress — fills over one slide interval */
+@keyframes doas-bar {
+  from {
+    width: 0%;
+  }
+  to {
+    width: 100%;
+  }
+}
+
+.kenburns {
+  animation: doas-kenburns 9s ease-out both;
+  will-change: transform;
+}
+
+.hero-bar {
+  animation: doas-bar var(--hero-interval, 6500ms) linear both;
+}
+
 .reveal {
   animation: doas-rise 0.62s cubic-bezier(0.16, 1, 0.3, 1) both;
   animation-delay: calc(var(--i, 0) * 70ms);

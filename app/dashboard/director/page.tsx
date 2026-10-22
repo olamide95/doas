@@ -17,7 +17,7 @@ import { CompliancePanel } from "@/components/monitoring/compliance-panel"
 import { StaffPanel } from "@/components/shared/staff-panel"
 import { RegisterPanel } from "@/components/shared/register-panel"
 import { PageHeading, StatTile } from "@/components/dashboard/kit"
-import PractitionerUploadPanel from "@/components/csu/practitioner-upload-panel"
+import { PractitionerRegistry } from "@/components/dashboard/practitioners/practitioner-registry"
 
 export default function DirectorDashboard() {
   const [tab, setTab] = React.useState("overview")
@@ -70,7 +70,12 @@ export default function DirectorDashboard() {
       {tab === "meetings" ? <DirectorMeetings /> : null}
       {tab === "reports" ? <DirectorateReport /> : null}
       {tab === "register" ? <RegisterPanel /> : null}
-      {tab === "practitioners" ? <PractitionerUploadPanel /> : null}
+      {tab === "practitioners" ? (
+        <div className="space-y-5">
+          <PageHeading title="Practitioners" description="Third-party practitioners and every structure they operate, digitised from the physical files." />
+          <PractitionerRegistry actor="director" />
+        </div>
+      ) : null}
       {tab === "compliance" ? <CompliancePanel unit={DEPARTMENT.director} /> : null}
       {tab === "staff" ? <StaffPanel /> : null}
       {tab === "chat" ? <ChatPanel role="director" channels={channelsFor("director")} /> : null}

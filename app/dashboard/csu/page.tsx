@@ -17,7 +17,8 @@ import { useSubmissions } from "@/components/dashboard/work-queue"
 import { EmptyState, PageHeading, Panel, RowsSkeleton, StatTile, StatusPill, TONE, toneForStatus } from "@/components/dashboard/kit"
 import { CsuSubmissions } from "@/components/csu/submissions-queue"
 import MeetingRequestsPanel from "@/components/csu/meeting-requests-panel"
-import PractitionerUploadPanel from "@/components/csu/practitioner-upload-panel"
+import { PractitionerRegistry } from "@/components/dashboard/practitioners/practitioner-registry"
+import { PRACTITIONER_COL, isPast } from "@/lib/practitioner-registry"
 
 interface ActivityRow {
   action?: string
@@ -30,7 +31,7 @@ export default function CSUDashboard() {
   const [tab, setTab] = React.useState("overview")
   const { rows, loading } = useSubmissions(200)
 
-  const practitioners = useRealtimeCollection<{ status?: string }>(COL.practitioners, [orderBy("timestamp", "desc"), limit(400)], [])
+  const practitioners = useRealtimeCollection<{ arconLicenseExpiry?: string }>(PRACTITIONER_COL.profiles, [orderBy("companyName"), limit(1000)], [])
   const meetings = useRealtimeCollection<{ status?: string }>(COL.meetings, [orderBy("createdAt", "desc"), limit(200)], [])
   const activity = useRealtimeCollection<ActivityRow>(COL.activity, [orderBy("timestamp", "desc"), limit(12)], [])
 
@@ -38,7 +39,7 @@ export default function CSUDashboard() {
   const returned = rows.filter((r) => stage("blocked").includes(r.status ?? "")).length
   const issued = rows.filter((r) => stage("issued").includes(r.status ?? "")).length
   const meetingsWaiting = meetings.data.filter((m) => (m.status ?? "") === "pending").length
-  const activePractitioners = practitioners.data.filter((p) => (p.status ?? "active") === "active").length
+  const activePractitioners = practitioners.data.filter((p) => !isPast(p.arconLicenseExpiry)).length
 
   const nav: ShellNavItem[] = [
     { value: "overview", label: "Overview", icon: LayoutDashboard },
@@ -70,7 +71,7 @@ export default function CSUDashboard() {
               value={activePractitioners}
               tone="idle"
               icon={BadgeCheck}
-              note={`${practitioners.data.length} on the register`}
+              note={`${practitioners.data.length} on file · licence current`}
               onClick={() => setTab("practitioners")}
             />
           </div>
@@ -160,8 +161,8 @@ export default function CSUDashboard() {
 
       {tab === "practitioners" ? (
         <div className="space-y-5">
-          <PageHeading title="Practitioners" description="The register of licensed signage practitioners and the firms they work for." />
-          <PractitionerUploadPanel />
+          <PageHeading title="Practitioners" description="Digitise practitioner files and their site inventory from the physical records." />
+          <PractitionerRegistry actor="csu" />
         </div>
       ) : null}
 

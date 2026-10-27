@@ -272,11 +272,18 @@ export const STRUCTURE_TYPES = [
   "Unipole",
   "Portrait",
   "LED Digital Screen",
+  "Eye catcher",
   "Gantry",
   "Bridge Panel",
   "Rooftop",
   "Backlit",
-  "Wall Drapery",
+  "Wall Drape",
+  "48-Sheet",
+  "96-Sheet",
+  "Large Format",
+  "Boxed Portrait",
+  "Flat pole",
+  "Lamp post"
 ] as const
 
 export const FACE_OPTIONS = [

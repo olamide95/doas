@@ -9,12 +9,14 @@ import { KeyRound, Loader2, LogIn } from "lucide-react"
 import { auth } from "@/lib/firebase"
 import { deskForDepartment, deskForPath } from "@/lib/roles"
 import { loadStaff } from "@/components/auth/staff-context"
+import { loadPortalUser } from "@/components/auth/portal-context"
 import { ActionButton, TextField } from "@/components/dashboard/form-kit"
 import { Panel } from "@/components/dashboard/kit"
 
 const ERRORS: Record<string, string> = {
   suspended: "Your access has been suspended. Contact the Director's office.",
-  unregistered: "This account isn't on the staff register. Ask the Director to add you.",
+  unregistered: "This account isn't on the staff register or the practitioner portal. Contact the Directorate.",
+  portalSuspended: "Your practitioner portal access has been suspended. Contact Customer Service.",
   nodesk: "Your account has no desk assigned. Ask the Director to set your department.",
   failed: "We couldn't check your access. Check your connection and try again.",
 }
@@ -45,6 +47,17 @@ function LoginInner() {
     async (user: User) => {
       const staff = await loadStaff(user)
       if (!staff) {
+        // Not staff — a practitioner portal login?
+        const portal = await loadPortalUser(user).catch(() => null)
+        if (portal) {
+          if (!portal.active) {
+            await signOut(auth)
+            setError(ERRORS.portalSuspended)
+            return false
+          }
+          router.replace(next && next.startsWith("/portal") ? next : "/portal")
+          return true
+        }
         await signOut(auth)
         setError(ERRORS.unregistered)
         return false
@@ -134,14 +147,14 @@ function LoginInner() {
         <div className="mb-6 flex items-center gap-3">
           <span className="grid h-10 w-10 place-items-center rounded-xl bg-primary font-display text-[14px] font-bold text-primary-foreground">DO</span>
           <div>
-            <p className="font-display text-[18px] font-semibold text-foreground">DOAS staff sign-in</p>
+            <p className="font-display text-[18px] font-semibold text-foreground">DOAS sign-in</p>
             <p className="text-[12.5px] text-muted-foreground">Directorate of Outdoor Advertisement and Signage</p>
           </div>
         </div>
 
         <Panel bodyClassName="p-5">
           <form onSubmit={submit} className="space-y-4">
-            <TextField id="login-email" label="Work email" type="email" value={email} onChange={setEmail} placeholder="name@doas.gov.ng" />
+            <TextField id="login-email" label="Email" type="email" value={email} onChange={setEmail} placeholder="name@doas.gov.ng" hint="Staff and registered practitioners sign in here." />
             <div>
               <label htmlFor="login-password" className="mb-1.5 block text-[12.5px] font-medium text-foreground">
                 Password
@@ -180,6 +193,9 @@ function LoginInner() {
         ) : null}
 
         <p className="mt-6 text-center text-[12.5px] text-muted-foreground">
+          Practitioners: your portal login is created by DOAS Customer Service from your practitioner file.
+        </p>
+        <p className="mt-2 text-center text-[12.5px] text-muted-foreground">
           Applying for a permit?{" "}
           <Link href="/submission-status" className="font-semibold text-accent underline-offset-4 hover:underline">
             Track your application

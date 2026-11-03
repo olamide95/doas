@@ -2,29 +2,45 @@ rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
 
-    function isStaff() {
-      return request.auth != null
-        && firestore.exists(/databases/(default)/documents/staff/$(request.auth.uid))
+    function signedIn() { return request.auth != null; }
+    function staff() {
+      return signedIn() && firestore.exists(/databases/(default)/documents/staff/$(request.auth.uid))
         && firestore.get(/databases/(default)/documents/staff/$(request.auth.uid)).data.active != false;
     }
-    function smallFile() { return request.resource.size < 10 * 1024 * 1024; }
+    function smallFile() { return request.resource.size < 20 * 1024 * 1024; }
+    function documentType() {
+      return request.resource.contentType.matches('image/.*')
+        || request.resource.contentType == 'application/pdf'
+        || request.resource.contentType.matches('application/(acad|dxf|x-dwg|octet-stream)');
+    }
 
-    // Applicant uploads (documents, payment proof). Download URLs are needed right after upload.
-    match /submissions/{ref}/{file} {
+    // Download URLs carry their own token; reads stay open as before.
+    match /{all=**} {
       allow read: if true;
-      allow create: if smallFile();
-      allow update, delete: if isStaff();
     }
 
-    match /meeting-requests/{ref}/{file} {
-      allow read: if true;
-      allow create: if smallFile();
-      allow update, delete: if isStaff();
+    // Public application forms (first party) and fee receipts.
+    match /submissions/{rest=**} {
+      allow write: if smallFile() && documentType();
     }
 
-    // Site photos, certificates, finance proofs, practitioner documents — staff only.
-    match /{allPaths=**} {
-      allow read, write: if isStaff() && (request.resource == null || smallFile());
+    // Public meeting-request attachments.
+    match /meeting-requests/{rest=**} {
+      allow write: if smallFile() && documentType();
     }
+
+    // Practitioner portal uploads — only into the practitioner's own folder.
+    match /portal/{uid}/{rest=**} {
+      allow write: if signedIn() && request.auth.uid == uid && smallFile() && documentType();
+    }
+
+    // Staff desks: registry, inspections, vetting, setting out, finance, announcements.
+    match /practitioners/{rest=**} { allow write: if staff() && smallFile(); }
+    match /planning/{rest=**} { allow write: if staff() && smallFile(); }
+    match /vetting/{rest=**} { allow write: if staff() && smallFile(); }
+    match /monitoring/{rest=**} { allow write: if staff() && smallFile(); }
+    match /finance/{rest=**} { allow write: if staff() && smallFile(); }
+    match /announcements/{rest=**} { allow write: if staff() && smallFile(); }
+    match /site-visits/{rest=**} { allow write: if staff() && smallFile(); }
   }
 }

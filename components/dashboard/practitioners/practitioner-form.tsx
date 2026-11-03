@@ -156,7 +156,15 @@ export function PractitionerForm({
         updatedAt: now,
         updatedBy: actor,
       }
-      await setDoc(ref, record)
+      // Keep the portal-login fields this form doesn't own (set by /api/practitioners/account).
+      const keep: Record<string, unknown> = {}
+      if (existing) {
+        for (const key of ["portalUid", "portalEmail", "portalActive", "portalCreatedAt", "portalCreatedBy", "portalUpdatedAt", "portalPasswordResetAt"]) {
+          const value = (existing as unknown as Record<string, unknown>)[key]
+          if (value !== undefined) keep[key] = value
+        }
+      }
+      await setDoc(ref, { ...keep, ...record })
 
       await logActivity({
         actor,

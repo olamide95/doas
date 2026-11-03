@@ -4,7 +4,7 @@ import * as React from "react"
 import { addDoc, arrayUnion, collection, doc, getDoc, limit, orderBy, updateDoc, writeBatch } from "firebase/firestore"
 import { AlertTriangle, CalendarClock, Forward, RefreshCcw, Save, Undo2 } from "lucide-react"
 import { COL, db } from "@/lib/firebase"
-import { DEPARTMENT, REGISTER_COLLECTION, STATUS, TARIFF_COLLECTION, daysUntil, invoiceNumber, parseDate, isoDate, stage, todayISO } from "@/lib/workflow"
+import { DEPARTMENT, REGISTER_COLLECTION, STATUS, TARIFF_COLLECTION, daysUntil, invoiceNumber, parseDate, isoDate, stage, todayISO, AFTER_BILLING } from "@/lib/workflow"
 import {
   CYCLE_TYPES,
   DEFAULT_SCHEDULE,
@@ -290,7 +290,7 @@ export function BillingQueue() {
           label: "To assess",
           routes: ["first", "third"],
           statuses: stage("billing"),
-          empty: { title: "Nothing to price", body: "The Director sends files here once field measurements are verified." },
+          empty: { title: "Nothing to price", body: "The Director sends files here once measurements are verified (first party) or technical vetting is approved (third party)." },
           actions: [
             {
               key: "query",
@@ -318,7 +318,7 @@ export function BillingQueue() {
           value: "sent",
           label: "Billed",
           routes: ["first", "third"],
-          statuses: [...stage("billProposed"), ...stage("awaitingPayment"), ...stage("paymentReconciled"), ...stage("issued")],
+          statuses: AFTER_BILLING,
           empty: { title: "Nothing billed yet", body: "Bills you've committed stay here for reference." },
           column: { header: "Net invoice", render: (row) => <span className="figure">{naira(row.billing?.netInvoiceAmount as number)}</span> },
         },

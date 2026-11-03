@@ -28,9 +28,14 @@ interface ShellProps {
   active: string
   onNavigate: (value: string) => void
   children: React.ReactNode
+  /** "portal" hides the desk switcher and file tracker and signs out to /login. */
+  variant?: "desk" | "portal"
+  /** Overrides the name shown in the account menu. */
+  accountName?: string
 }
 
-export function DashboardShell({ audience, unitName, unitCaption, nav, active, onNavigate, children }: ShellProps) {
+export function DashboardShell({ audience, unitName, unitCaption, nav, active, onNavigate, children, variant = "desk", accountName }: ShellProps) {
+  const portal = variant === "portal"
   const router = useRouter()
   const { user } = useCurrentUser()
   const [collapsed, setCollapsed] = React.useState(false)
@@ -39,13 +44,13 @@ export function DashboardShell({ audience, unitName, unitCaption, nav, active, o
   const { data: notifications } = useRealtimeCollection<Record<string, unknown>>(COL.notifications, [where("userId", "==", audience), limit(100)], [audience])
   const unread = notifications.filter((n) => !(n.isRead ?? n.read ?? false)).length
 
-  const displayName = user?.displayName || user?.email?.split("@")[0] || unitName
+  const displayName = accountName || user?.displayName || user?.email?.split("@")[0] || unitName
   const activeItem = nav.find((item) => item.value === active)
 
   const handleSignOut = async () => {
     try {
       if (auth.currentUser) await signOut(auth)
-      router.push("/desks")
+      router.push(portal ? "/login" : "/desks")
     } catch (error) {
       toast.error({ title: "Sign out failed", description: error instanceof Error ? error.message : "Try again in a moment." })
     }
@@ -59,7 +64,7 @@ export function DashboardShell({ audience, unitName, unitCaption, nav, active, o
         </span>
         {!collapsed ? (
           <div className="min-w-0 leading-tight">
-            <p className="font-display text-[14px] font-semibold text-white">DOAS</p>
+            <p className="font-display text-[14px] font-semibold text-white">{portal ? "DOAS Portal" : "DOAS"}</p>
             <p className="truncate text-[11px] text-[hsl(var(--sidebar-foreground))]/70">{unitCaption}</p>
           </div>
         ) : null}
@@ -99,14 +104,25 @@ export function DashboardShell({ audience, unitName, unitCaption, nav, active, o
       </nav>
 
       <div className="border-t border-[hsl(var(--sidebar-border))] p-2.5">
-        <button
-          type="button"
-          onClick={() => router.push("/desks")}
-          className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-[12.5px] text-[hsl(var(--sidebar-foreground))]/80 transition-colors hover:bg-[hsl(var(--sidebar-accent))] hover:text-white"
-        >
-          <LayoutGrid className="h-4 w-4" aria-hidden />
-          {!collapsed ? "All desks" : null}
-        </button>
+        {!portal ? (
+          <button
+            type="button"
+            onClick={() => router.push("/desks")}
+            className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-[12.5px] text-[hsl(var(--sidebar-foreground))]/80 transition-colors hover:bg-[hsl(var(--sidebar-accent))] hover:text-white"
+          >
+            <LayoutGrid className="h-4 w-4" aria-hidden />
+            {!collapsed ? "All desks" : null}
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={handleSignOut}
+            className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-[12.5px] text-[hsl(var(--sidebar-foreground))]/80 transition-colors hover:bg-[hsl(var(--sidebar-accent))] hover:text-white"
+          >
+            <LogOut className="h-4 w-4" aria-hidden />
+            {!collapsed ? "Sign out" : null}
+          </button>
+        )}
         <button
           type="button"
           onClick={() => setCollapsed((v) => !v)}
@@ -173,15 +189,24 @@ export function DashboardShell({ audience, unitName, unitCaption, nav, active, o
               ) : null}
             </button>
 
-            <AccountMenu name={displayName} email={user?.email ?? undefined} unit={unitName} onProfile={() => onNavigate("settings")} onSignOut={handleSignOut} />
+            <AccountMenu
+              name={displayName}
+              email={user?.email ?? undefined}
+              unit={unitName}
+              signOutLabel={portal ? "Sign out" : "Leave desk"}
+              onProfile={() => onNavigate(portal ? "profile" : "settings")}
+              onSignOut={handleSignOut}
+            />
           </div>
         </header>
 
         <main className="flex-1 px-4 py-5 sm:px-6 sm:py-7">
           {children}
-          <div className="mt-8">
-            <FileTracker />
-          </div>
+          {!portal ? (
+            <div className="mt-8">
+              <FileTracker />
+            </div>
+          ) : null}
         </main>
       </div>
     </div>
@@ -194,12 +219,14 @@ function AccountMenu({
   unit,
   onProfile,
   onSignOut,
+  signOutLabel = "Leave desk",
 }: {
   name: string
   email?: string
   unit: string
   onProfile: () => void
   onSignOut: () => void
+  signOutLabel?: string
 }) {
   const [open, setOpen] = React.useState(false)
   const ref = React.useRef<HTMLDivElement>(null)
@@ -269,7 +296,7 @@ function AccountMenu({
           <div className="border-t border-border p-1.5">
             <MenuItem
               icon={LogOut}
-              label="Leave desk"
+              label={signOutLabel}
               destructive
               onClick={() => {
                 setOpen(false)

@@ -2,12 +2,24 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
+    // ---------------- Who is calling ----------------
     function signedIn() { return request.auth != null; }
+
     function staffPath() { return /databases/$(database)/documents/staff/$(request.auth.uid); }
     function isStaff() { return signedIn() && exists(staffPath()) && get(staffPath()).data.active != false; }
-    function isDirector() { return isStaff() && get(staffPath()).data.department == 'Director'; }
+    function department() { return get(staffPath()).data.department; }
+    function isDirector() { return isStaff() && department() == 'Director'; }
+    function isStaffAdmin() { return isStaff() && department() == 'Staff Admin'; }
+
+    // Practitioner portal logins: portalUsers/{uid} → practitionerId (written only by /api/practitioners/account).
+    function portalPath() { return /databases/$(database)/documents/portalUsers/$(request.auth.uid); }
+    function isPractitioner() { return signedIn() && exists(portalPath()) && get(portalPath()).data.active != false; }
+    function practitionerId() { return get(portalPath()).data.practitionerId; }
+
     // Public tracker lookups are single-document queries by reference.
     function publicLookup() { return request.query.limit <= 1; }
+
+    // ---------------- Staff & HR ----------------
 
     // Staff records are written only by /api/staff (Admin SDK bypasses rules).
     match /staff/{uid} {
@@ -15,51 +27,108 @@ service cloud.firestore {
       allow write: if false;
     }
 
-    function submissionRules() { return true; }
+    // Nominal roll holds payroll data — Staff Admin and the Director only.
+    match /nominalRoll/{id} {
+      allow read, write: if isStaffAdmin() || isDirector();
+    }
+
+    // ---------------- Practitioners ----------------
+
+    match /portalUsers/{uid} {
+      allow read: if isStaff() || (signedIn() && request.auth.uid == uid);
+      allow write: if false;
+    }
+
+    match /practitionerProfiles/{id} {
+      allow read: if isStaff() || (isPractitioner() && practitionerId() == id);
+      allow write: if isStaff();
+    }
+
+    match /practitionerSites/{id} {
+      allow get: if isStaff() || (isPractitioner() && resource.data.practitionerId == practitionerId());
+      allow list: if isStaff() || (isPractitioner() && resource.data.practitionerId == practitionerId());
+      allow write: if isStaff();
+    }
+
+    // Legacy collection
+    match /practitioners/{id} { allow read, write: if isStaff(); }
+
+    // New-site announcements: practitioners read, CSU/Director write.
+    match /announcements/{id} {
+      allow read: if isStaff() || isPractitioner();
+      allow write: if isStaff();
+    }
+
+    // ---------------- Applications ----------------
+
+    // Public (first-party / legacy third-party) applicants: create with an unverified fee, edit while with CSU, declare payment.
+    function applicantCreate() {
+      return request.resource.data.status == 'With CSU'
+        && request.resource.data.department == 'CSU'
+        && !('practitionerUid' in request.resource.data)
+        && (!('applicationFee' in request.resource.data) || request.resource.data.applicationFee.verified == false);
+    }
+    function applicantEdit() {
+      return resource.data.status in ['With CSU', 'Changes Requested', 'Pending', 'Under Review']
+        && !('practitionerUid' in resource.data)
+        && request.resource.data.status == 'With CSU'
+        && request.resource.data.department == 'CSU'
+        && request.resource.data.get('applicationFee', null) == resource.data.get('applicationFee', null);
+    }
+    function applicantPayment() {
+      return resource.data.status in ['Awaiting Payment', 'Part Payment — Balance Due', 'Billed']
+        && request.resource.data.status == resource.data.status
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['payment', 'comments', 'updatedAt'])
+        && request.resource.data.get('payment', {}).diff(resource.data.get('payment', {})).affectedKeys().hasOnly(['declared']);
+    }
+    // Practitioners never write directly — every portal action goes through /api/portal.
+    function ownFile() { return signedIn() && resource.data.get('practitionerUid', '') == request.auth.uid; }
+    // List queries must filter on practitionerUid == auth.uid for this to hold.
+    function ownListed() { return signedIn() && resource.data.practitionerUid == request.auth.uid; }
 
     match /firstPartySubmissions/{id} {
       allow get: if isStaff();
       allow list: if isStaff() || publicLookup();
-      allow create: if request.resource.data.status == 'With CSU' && request.resource.data.department == 'CSU';
-      allow update: if isStaff()
-        // Applicant editing a file that is still with CSU or was returned for changes
-        || (resource.data.status in ['With CSU', 'Changes Requested', 'Pending', 'Under Review']
-            && request.resource.data.status == 'With CSU'
-            && request.resource.data.department == 'CSU')
-        // Applicant declaring a payment — only payment.declared, comments and updatedAt may change
-        || (resource.data.status in ['Awaiting Payment', 'Part Payment — Balance Due', 'Billed']
-            && request.resource.data.status == resource.data.status
-            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['payment', 'comments', 'updatedAt'])
-            && request.resource.data.get('payment', {}).diff(resource.data.get('payment', {})).affectedKeys().hasOnly(['declared']));
+      allow create: if isStaff() || applicantCreate();
+      allow update: if isStaff() || applicantEdit() || applicantPayment();
       allow delete: if isDirector();
     }
 
     match /thirdPartySubmissions/{id} {
-      allow get: if isStaff();
-      allow list: if isStaff() || publicLookup();
-      allow create: if request.resource.data.status == 'With CSU' && request.resource.data.department == 'CSU';
-      allow update: if isStaff()
-        || (resource.data.status in ['With CSU', 'Changes Requested', 'Pending', 'Under Review']
-            && request.resource.data.status == 'With CSU'
-            && request.resource.data.department == 'CSU')
-        || (resource.data.status in ['Awaiting Payment', 'Part Payment — Balance Due', 'Billed']
-            && request.resource.data.status == resource.data.status
-            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['payment', 'comments', 'updatedAt'])
-            && request.resource.data.get('payment', {}).diff(resource.data.get('payment', {})).affectedKeys().hasOnly(['declared']));
+      allow get: if isStaff() || ownFile();
+      allow list: if isStaff() || ownListed() || publicLookup();
+      allow create: if isStaff() || applicantCreate();
+      allow update: if isStaff() || applicantEdit() || applicantPayment();
       allow delete: if isDirector();
     }
 
+    // Letters, e-receipts and certificates. Anyone holding the code can verify one (single get);
+    // practitioners list their own; only staff issue; only the Director revokes.
+    match /issuedDocuments/{code} {
+      allow get: if true;
+      allow list: if isStaff() || (signedIn() && resource.data.practitionerUid == request.auth.uid);
+      allow create: if isStaff();
+      allow update: if isDirector();
+      allow delete: if false;
+    }
+
     match /meetingRequests/{id} {
-      allow get: if isStaff();
-      allow list: if isStaff() || publicLookup();
-      allow create: if request.resource.data.status == 'pending';
+      allow get: if isStaff() || (signedIn() && resource.data.get('practitionerUid', '') == request.auth.uid);
+      allow list: if isStaff() || publicLookup() || (signedIn() && resource.data.practitionerUid == request.auth.uid);
+      allow create: if request.resource.data.status == 'pending' && !('practitionerUid' in request.resource.data);
       allow update, delete: if isStaff();
     }
 
-    // Public forms notify CSU and Finance; only staff read them.
+    // ---------------- Desk plumbing ----------------
+
+    // Public forms notify CSU and Finance; staff read desk notifications;
+    // practitioners read (and mark read) their own "pr_<uid>" notifications.
     match /notifications/{id} {
       allow create: if true;
-      allow read, update: if isStaff();
+      allow read: if isStaff() || (signedIn() && resource.data.userId == 'pr_' + request.auth.uid);
+      allow update: if isStaff()
+        || (signedIn() && resource.data.userId == 'pr_' + request.auth.uid
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isRead', 'read']));
       allow delete: if isDirector();
     }
 
@@ -72,7 +141,6 @@ service cloud.firestore {
     match /tariffSchedules/{id} { allow read, write: if isStaff(); }
     match /complianceIssues/{id} { allow read, write: if isStaff(); }
     match /tasks/{id} { allow read, write: if isStaff(); }
-    match /practitioners/{id} { allow read, write: if isStaff(); }
     match /chats/{room}/messages/{id} { allow read, write: if isStaff(); }
 
     // Everything else is closed.

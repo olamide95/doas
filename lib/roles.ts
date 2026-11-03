@@ -13,10 +13,11 @@ export const DESKS: Desk[] = [
   { slug: "csu", department: DEPARTMENT.csu, path: "/dashboard/csu", label: "Customer Service Unit" },
   { slug: "director", department: DEPARTMENT.director, path: "/dashboard/director", label: "Director's Office", aliases: ["Director's Office"] },
   { slug: "business-development", department: DEPARTMENT.businessDevelopment, path: "/dashboard/business-development", label: "Business Development" },
-  { slug: "planning", department: DEPARTMENT.planning, path: "/dashboard/planning", label: "Planning & Development" },
+  { slug: "planning", department: DEPARTMENT.planning, path: "/dashboard/planning", label: "Planning & Development", aliases: ["PDB", "Planning"] },
   { slug: "billing", department: DEPARTMENT.billing, path: "/dashboard/billing", label: "Billing" },
-  { slug: "finance", department: DEPARTMENT.finance, path: "/dashboard/finance", label: "Finance & Admin", aliases: ["Finance and Admin"] },
+  { slug: "finance", department: DEPARTMENT.finance, path: "/dashboard/finance", label: "Finance & Admin", aliases: ["Finance and Admin", "Accounts"] },
   { slug: "monitoring", department: DEPARTMENT.monitoring, path: "/dashboard/monitoring", label: "Monitoring & Enforcement" },
+  { slug: "staff-admin", department: DEPARTMENT.staffAdmin, path: "/dashboard/staff-admin", label: "Staff Admin", aliases: ["Admin", "Personnel"] },
 ]
 
 export function deskForDepartment(department?: string | null) {
@@ -30,3 +31,16 @@ export function deskForPath(pathname?: string | null) {
 }
 
 export const DESIGNATIONS = ["Director", "Deputy Director", "Head of Unit", "Manager", "Supervisor", "Officer", "Assistant"]
+
+/** Designations that run a unit: they assign files to officers and confirm their reports. */
+export const HEAD_DESIGNATIONS = ["Director", "Deputy Director", "Head of Unit"]
+
+export function isUnitHead(designation?: string | null) {
+  return HEAD_DESIGNATIONS.includes(designation ?? "")
+}
+
+/** Departments whose staff can create and manage staff sign-in accounts. */
+export const ACCOUNT_MANAGERS: string[] = [DEPARTMENT.director, DEPARTMENT.staffAdmin]
+
+/** Departments that can create practitioner portal logins. */
+export const PORTAL_MANAGERS: string[] = [DEPARTMENT.director, DEPARTMENT.csu]

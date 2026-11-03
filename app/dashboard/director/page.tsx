@@ -2,7 +2,7 @@
 
 import * as React from "react"
 import { limit, orderBy } from "firebase/firestore"
-import { BadgeCheck, BarChart3, Bell, CalendarDays, CheckCircle2, FileText, Gavel, LayoutDashboard, ListTodo, MessagesSquare, Receipt, ScrollText, ShieldAlert, Stamp, Users } from "lucide-react"
+import { BadgeCheck, BarChart3, Bell, CalendarDays, CheckCircle2, FileText, Gavel, LayoutDashboard, ListTodo, Megaphone, MessagesSquare, Receipt, ScrollText, ShieldAlert, Stamp, Users } from "lucide-react"
 import { COL } from "@/lib/firebase"
 import { COMPLIANCE_COLLECTION, DEPARTMENT, DIRECTOR_DESK, channelsFor, stage } from "@/lib/workflow"
 import { useRealtimeCollection } from "@/hooks/use-firestore"
@@ -18,6 +18,7 @@ import { StaffPanel } from "@/components/shared/staff-panel"
 import { RegisterPanel } from "@/components/shared/register-panel"
 import { PageHeading, StatTile } from "@/components/dashboard/kit"
 import { PractitionerRegistry } from "@/components/dashboard/practitioners/practitioner-registry"
+import { AnnouncementsPanel } from "@/components/shared/announcements-panel"
 
 export default function DirectorDashboard() {
   const [tab, setTab] = React.useState("overview")
@@ -28,7 +29,7 @@ export default function DirectorDashboard() {
   const has = (statuses: string[]) => rows.filter((r) => statuses.includes(r.status ?? "")).length
   const onDesk = has(DIRECTOR_DESK)
   const pricing = has(stage("billProposed"))
-  const signoffs = has(stage("paymentReconciled"))
+  const signoffs = has([...stage("paymentReconciled"), ...stage("settingOutReported"), ...stage("certificateReleased")])
   const issued = has(stage("issued"))
   const meetingsWaiting = meetings.data.filter((m) => m.status === "forwarded").length
   const openIssues = issues.data.filter((i) => i.status !== "Resolved").length
@@ -40,6 +41,7 @@ export default function DirectorDashboard() {
     { value: "reports", label: "Reports", icon: BarChart3 },
     { value: "register", label: "Permit register", icon: ScrollText },
     { value: "practitioners", label: "Practitioners", icon: BadgeCheck },
+    { value: "announcements", label: "Site announcements", icon: Megaphone },
     { value: "compliance", label: "Compliance", icon: ShieldAlert, badge: openIssues },
     { value: "staff", label: "Staff", icon: Users },
     { value: "chat", label: "Chat", icon: MessagesSquare },
@@ -55,7 +57,7 @@ export default function DirectorDashboard() {
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
             <StatTile index={0} label="On your desk" value={onDesk} tone="wait" icon={Gavel} onClick={() => setTab("applications")} />
             <StatTile index={1} label="Bills to confirm" value={pricing} tone="move" icon={Receipt} note="From Billing, incl. renewals" onClick={() => setTab("applications")} />
-            <StatTile index={2} label="Permits to sign" value={signoffs} tone="move" icon={Stamp} note="Payment reconciled by Finance" onClick={() => setTab("applications")} />
+            <StatTile index={2} label="Permits & certificates to sign" value={signoffs} tone="move" icon={Stamp} note="Permits, setting-out certificates, approval letters" onClick={() => setTab("applications")} />
             <StatTile index={3} label="Permits issued" value={issued} tone="clear" icon={CheckCircle2} note={`${rows.length} files on record`} onClick={() => setTab("register")} />
           </div>
           <DirectorSubmissions />
@@ -74,6 +76,12 @@ export default function DirectorDashboard() {
         <div className="space-y-5">
           <PageHeading title="Practitioners" description="Third-party practitioners and every structure they operate, digitised from the physical files." />
           <PractitionerRegistry actor="director" />
+        </div>
+      ) : null}
+      {tab === "announcements" ? (
+        <div className="space-y-5">
+          <PageHeading title="Site announcements" description="New sites announced to every practitioner on the portal." />
+          <AnnouncementsPanel actor="director" />
         </div>
       ) : null}
       {tab === "compliance" ? <CompliancePanel unit={DEPARTMENT.director} /> : null}

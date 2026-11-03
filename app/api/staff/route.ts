@@ -6,8 +6,11 @@ export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
 
 // Must match the DEPARTMENT values in lib/workflow.ts.
-const DEPARTMENTS = ["CSU", "Director", "Business Development", "Planning and Development", "Billing", "Finance", "Monitoring and Enforcement"]
+const DEPARTMENTS = ["CSU", "Director", "Business Development", "Planning and Development", "Billing", "Finance", "Monitoring and Enforcement", "Staff Admin"]
 const DIRECTOR = "Director"
+const STAFF_ADMIN = "Staff Admin"
+/** Who may create and manage staff sign-in accounts. Staff Admin cannot touch Director accounts. */
+const MANAGERS = [DIRECTOR, STAFF_ADMIN]
 
 const fail = (status: number, error: string) => NextResponse.json({ error }, { status })
 const message = (err: unknown) => (err instanceof Error ? err.message : "Unexpected error")
@@ -42,7 +45,7 @@ export async function GET() {
   }
 }
 
-/** Create a staff member with a sign-in account. Director only (or first-time setup). */
+/** Create a staff member with a sign-in account. Director or Staff Admin (or first-time setup). */
 export async function POST(req: Request) {
   try {
     const body = await req.json().catch(() => ({}))
@@ -52,6 +55,7 @@ export async function POST(req: Request) {
     const department = String(body.department ?? "")
     const designation = String(body.designation ?? "")
     const password = String(body.password ?? "")
+    const rollId = String(body.rollId ?? "").trim()
 
     if (!name || !email || !department || !designation) return fail(400, "Name, email, department and designation are required.")
     if (!DEPARTMENTS.includes(department)) return fail(400, `Unknown department: ${department}`)
@@ -65,8 +69,18 @@ export async function POST(req: Request) {
       if (department !== DIRECTOR) return fail(400, "The first account must be the Director.")
     } else {
       const caller = await getCaller(req)
-      if (!caller || caller.department !== DIRECTOR) return fail(403, "Only the Director can create staff accounts.")
+      if (!caller || !MANAGERS.includes(caller.department)) return fail(403, "Only the Director or Staff Admin can create staff accounts.")
+      if (caller.department === STAFF_ADMIN && department === DIRECTOR) return fail(403, "Only the Director can create another Director account.")
       createdBy = caller.uid
+    }
+
+    // A practitioner portal login can't double as a staff account.
+    try {
+      const existing = await adminAuth().getUserByEmail(email)
+      const portal = await adminDb().collection("portalUsers").doc(existing.uid).get()
+      if (portal.exists) return fail(409, "This email is already used for a practitioner portal login.")
+    } catch (err) {
+      if (codeOf(err) !== "auth/user-not-found") throw err
     }
 
     let uid: string
@@ -82,17 +96,27 @@ export async function POST(req: Request) {
     }
 
     await adminAuth().setCustomUserClaims(uid, { department })
-    await adminDb().collection("staff").doc(uid).set({
-      name,
-      email,
-      phone,
-      department,
-      designation,
-      active: true,
-      hasAccount: true,
-      createdAt: FieldValue.serverTimestamp(),
-      createdBy,
-    })
+    await adminDb()
+      .collection("staff")
+      .doc(uid)
+      .set({
+        name,
+        email,
+        phone,
+        department,
+        designation,
+        active: true,
+        hasAccount: true,
+        rollId: rollId || null,
+        createdAt: FieldValue.serverTimestamp(),
+        createdBy,
+      })
+
+    if (rollId) {
+      const rollRef = adminDb().collection("nominalRoll").doc(rollId)
+      const roll = await rollRef.get()
+      if (roll.exists) await rollRef.update({ staffUid: uid, email, phone: phone || roll.data()?.phone || "", department, designation, updatedAt: new Date().toISOString() })
+    }
 
     return NextResponse.json({ uid })
   } catch (err) {
@@ -100,11 +124,11 @@ export async function POST(req: Request) {
   }
 }
 
-/** Suspend / restore, change desk or designation. Director only. */
+/** Suspend / restore, change desk or designation. Director or Staff Admin. */
 export async function PATCH(req: Request) {
   try {
     const caller = await getCaller(req)
-    if (!caller || caller.department !== DIRECTOR) return fail(403, "Only the Director can change staff accounts.")
+    if (!caller || !MANAGERS.includes(caller.department)) return fail(403, "Only the Director or Staff Admin can change staff accounts.")
 
     const body = await req.json().catch(() => ({}))
     const uid = String(body.uid ?? "")
@@ -113,6 +137,9 @@ export async function PATCH(req: Request) {
     const ref = adminDb().collection("staff").doc(uid)
     const snap = await ref.get()
     if (!snap.exists) return fail(404, "Staff member not found.")
+    const current = snap.data() ?? {}
+
+    if (caller.department === STAFF_ADMIN && current.department === DIRECTOR) return fail(403, "Only the Director can change a Director account.")
 
     const update: Record<string, unknown> = { updatedAt: FieldValue.serverTimestamp(), updatedBy: caller.uid }
 
@@ -135,7 +162,8 @@ export async function PATCH(req: Request) {
     if (body.department !== undefined) {
       const department = String(body.department)
       if (!DEPARTMENTS.includes(department)) return fail(400, `Unknown department: ${department}`)
-      if (uid === caller.uid && department !== DIRECTOR) return fail(400, "You can't move yourself off the Director's desk.")
+      if (uid === caller.uid && caller.department === DIRECTOR && department !== DIRECTOR) return fail(400, "You can't move yourself off the Director's desk.")
+      if (caller.department === STAFF_ADMIN && department === DIRECTOR) return fail(403, "Only the Director can move someone to the Director's desk.")
       update.department = department
       await authCall(() => adminAuth().setCustomUserClaims(uid, { department }))
     }
@@ -143,6 +171,18 @@ export async function PATCH(req: Request) {
     if (body.designation !== undefined) update.designation = String(body.designation)
 
     await ref.update(update)
+
+    if (current.rollId && (update.department || update.designation)) {
+      const rollRef = adminDb().collection("nominalRoll").doc(String(current.rollId))
+      const roll = await rollRef.get()
+      if (roll.exists) {
+        const patch: Record<string, unknown> = { updatedAt: new Date().toISOString() }
+        if (update.department) patch.department = update.department
+        if (update.designation) patch.designation = update.designation
+        await rollRef.update(patch)
+      }
+    }
+
     return NextResponse.json({ ok: true })
   } catch (err) {
     return fail(500, message(err))

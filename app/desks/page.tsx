@@ -7,6 +7,7 @@ import { Loader2 } from "lucide-react"
 import { auth } from "@/lib/firebase"
 import { deskForDepartment } from "@/lib/roles"
 import { loadStaff } from "@/components/auth/staff-context"
+import { loadPortalUser } from "@/components/auth/portal-context"
 
 /** Sends whoever is signed in to their own dashboard, or to /login. */
 export default function DesksRedirect() {
@@ -19,7 +20,12 @@ export default function DesksRedirect() {
         return
       }
       const staff = await loadStaff(user).catch(() => null)
-      router.replace(deskForDepartment(staff?.department)?.path ?? "/login")
+      if (!staff) {
+        const portal = await loadPortalUser(user).catch(() => null)
+        router.replace(portal ? "/portal" : "/login")
+        return
+      }
+      router.replace(deskForDepartment(staff.department)?.path ?? "/login")
     })
   }, [router])
 

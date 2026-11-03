@@ -6,7 +6,7 @@ import { sendPasswordResetEmail } from "firebase/auth"
 import { Building2, Copy, KeyRound, Plus, RefreshCw, UserRound, UserRoundPlus, X } from "lucide-react"
 import { auth, COL } from "@/lib/firebase"
 import { DEPARTMENT } from "@/lib/workflow"
-import { DESIGNATIONS } from "@/lib/roles"
+import { ACCOUNT_MANAGERS, DESIGNATIONS } from "@/lib/roles"
 import { useRealtimeCollection } from "@/hooks/use-firestore"
 import { initials } from "@/lib/format"
 import { toast } from "@/components/ui/toast"
@@ -48,7 +48,8 @@ function tempPassword() {
 
 export function StaffPanel({ scopeTo }: { scopeTo?: string }) {
   const { staff: me } = useStaff()
-  const canManage = me?.department === DEPARTMENT.director
+  // Director and Staff Admin manage accounts (Staff Admin cannot touch Director accounts — enforced by /api/staff).
+  const canManage = ACCOUNT_MANAGERS.includes(me?.department ?? "")
 
   const [search, setSearch] = React.useState("")
   const [tab, setTab] = React.useState<"people" | "units">("people")

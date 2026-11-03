@@ -69,11 +69,18 @@
   },
   "devDependencies": {
     "@types/node": "^22",
+    "@types/qrcode": "^1.5.6",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "install": "^0.13.0",
+    "jsbarcode": "^3.12.3",
+    "npm": "^11.21.1",
     "postcss": "^8",
+    "qrcode": "^1.5.4",
     "tailwindcss": "^3.4.17",
-    "typescript": "^5"
+    "then": "^0.0.1",
+    "typescript": "^5",
+    "xlsx": "^0.18.5"
   },
   "optionalDependencies": {
     "@next/swc-darwin-x64": "^16.3.4"

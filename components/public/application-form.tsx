@@ -6,12 +6,13 @@ import { addDoc, arrayUnion, collection, doc, serverTimestamp, updateDoc } from 
 import { getDownloadURL, ref, uploadBytes } from "firebase/storage"
 import { AlertTriangle, ChevronLeft, ChevronRight, FileText, Loader2, Paperclip, Send } from "lucide-react"
 import { COL, db, storage } from "@/lib/firebase"
-import { AREA_COUNCILS, DEPARTMENT, STATUS } from "@/lib/workflow"
+import { AREA_COUNCILS, DEPARTMENT, STATUS, applicationFeeFor, submissionReference } from "@/lib/workflow"
 import { SIGN_TYPES, STRUCTURE_TYPES } from "@/lib/tariff"
 import { findSubmission, isEditable } from "@/lib/applicant"
 import { toast } from "@/components/ui/toast"
 import { ActionButton, FieldGrid, SelectField, TextField, TextareaField } from "@/components/dashboard/form-kit"
 import { Panel, StatusPill } from "@/components/dashboard/kit"
+import { EMPTY_FEE, FeePayment, feeReady, type FeeState } from "@/components/payments/fee-payment"
 import { cn } from "@/lib/utils"
 
 type FieldKind = "text" | "tel" | "email" | "number" | "select" | "textarea"
@@ -42,6 +43,8 @@ export interface FormStep {
   title: string
   fields?: FieldDef[]
   documents?: DocDef[]
+  /** Remita application fee — skipped when an existing application is being edited. */
+  fee?: boolean
 }
 
 const opts = (list: string[]) => list.map((v) => ({ value: v, label: v }))
@@ -89,6 +92,7 @@ export const FIRST_PARTY_STEPS: FormStep[] = [
   { id: "organisation", title: "Organisation", fields: ORGANISATION_FIELDS },
   { id: "site", title: "Signage site", fields: SITE_FIELDS("first") },
   { id: "documents", title: "Documents", documents: COMMON_DOCS },
+  { id: "fee", title: "Application fee", fee: true },
 ]
 
 export const THIRD_PARTY_STEPS: FormStep[] = [
@@ -104,13 +108,10 @@ export const THIRD_PARTY_STEPS: FormStep[] = [
       { name: "structuralDrawings", label: "Structural drawings (optional)", accept: ".pdf,.dwg,.dxf" },
     ],
   },
+  { id: "fee", title: "Application fee", fee: true },
 ]
 
-function reference(route: "first" | "third") {
-  return `${route === "first" ? "FP" : "TP"}-${Date.now()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`
-}
-
-export function ApplicationForm({ route, steps, title, intro }: { route: "first" | "third"; steps: FormStep[]; title: string; intro: string }) {
+export function ApplicationForm({ route, steps: allSteps, title, intro }: { route: "first" | "third"; steps: FormStep[]; title: string; intro: string }) {
   const router = useRouter()
   const params = useSearchParams()
   const editingRef = params.get("id")
@@ -123,7 +124,10 @@ export function ApplicationForm({ route, steps, title, intro }: { route: "first"
   const [loading, setLoading] = React.useState(Boolean(editingRef))
   const [submitting, setSubmitting] = React.useState(false)
   const [errors, setErrors] = React.useState<Record<string, string>>({})
+  const [fee, setFee] = React.useState<FeeState>(EMPTY_FEE)
 
+  // The fee is paid once — an application being corrected doesn't pay again.
+  const steps = React.useMemo(() => (editingRef ? allSteps.filter((s) => !s.fee) : allSteps), [allSteps, editingRef])
   const allFields = React.useMemo(() => steps.flatMap((s) => s.fields ?? []), [steps])
 
   React.useEffect(() => {
@@ -178,6 +182,9 @@ export function ApplicationForm({ route, steps, title, intro }: { route: "first"
     ;(steps[index].documents ?? []).forEach((d) => {
       if (d.required && !files[d.name] && !existingUrls[d.name]) found[d.name] = "This document is required"
     })
+    if (steps[index].fee && !feeReady(fee)) {
+      found.fee = fee.configured ? "Pay the fee and check the payment before submitting." : "Enter your 12-digit RRR and check the payment, or upload the Remita receipt."
+    }
     setErrors(found)
     if (Object.keys(found).length) {
       toast.warning({ title: "Some fields need attention", description: "Fix the highlighted items before continuing." })
@@ -205,7 +212,7 @@ export function ApplicationForm({ route, steps, title, intro }: { route: "first"
       }
     }
     setSubmitting(true)
-    const submissionId = existing?.data.submissionId ?? reference(route)
+    const submissionId = existing?.data.submissionId ?? submissionReference(route)
     const now = new Date().toISOString()
 
     try {
@@ -230,6 +237,18 @@ export function ApplicationForm({ route, steps, title, intro }: { route: "first"
         department: DEPARTMENT.csu,
         files: fileUrls,
         updatedAt: now,
+      }
+      if (!existing) {
+        // Public submissions are never self-certified: CSU confirms the fee (rules enforce verified == false).
+        payload.applicationFee = {
+          amount: applicationFeeFor(route),
+          rrr: fee.rrr.replace(/\D/g, ""),
+          receiptUrl: fee.receiptUrl,
+          verified: false,
+          applicantChecked: fee.verified,
+          verifiedAmount: fee.verifiedAmount,
+          checkedAt: now,
+        }
       }
 
       if (existing) {
@@ -283,6 +302,16 @@ export function ApplicationForm({ route, steps, title, intro }: { route: "first"
           <h1 className="font-display text-[26px] font-semibold text-foreground sm:text-[30px]">{title}</h1>
           <p className="mt-1 max-w-[62ch] text-[13.5px] leading-relaxed text-muted-foreground">{intro}</p>
         </header>
+
+        {route === "third" && !existing ? (
+          <div className="mb-5 rounded-xl border border-border bg-muted/40 p-4 text-[13px] leading-relaxed text-foreground">
+            Registered practitioners should apply from the{" "}
+            <a href="/login" className="font-semibold text-accent underline-offset-4 hover:underline">
+              practitioner portal
+            </a>{" "}
+            — your details are filled in from your DOAS file and you only upload the photo montage at first.
+          </div>
+        ) : null}
 
         {existing ? (
           <div className="mb-5 rounded-xl border border-[hsl(var(--state-wait))]/35 bg-[hsl(var(--state-wait-soft))] p-4">
@@ -344,6 +373,22 @@ export function ApplicationForm({ route, steps, title, intro }: { route: "first"
                 )
               })}
             </FieldGrid>
+          ) : null}
+
+          {step.fee ? (
+            <div>
+              <FeePayment
+                route={route}
+                value={fee}
+                onChange={(next) => {
+                  setFee(next)
+                  setErrors((prev) => ({ ...prev, fee: "" }))
+                }}
+                payer={{ name: values.companyName ?? "", email: values.primaryContactEmail ?? "", phone: values.primaryContactPhone ?? "" }}
+                uploadFolder={`submissions/fees/${(values.primaryContactEmail || "applicant").replace(/[^\w.-]+/g, "_")}`}
+              />
+              {errors.fee ? <p className="mt-2 text-[11.5px] font-medium text-[hsl(var(--state-stop))]">{errors.fee}</p> : null}
+            </div>
           ) : null}
 
           {step.documents ? (

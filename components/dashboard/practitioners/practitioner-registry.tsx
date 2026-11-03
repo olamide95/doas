@@ -36,6 +36,7 @@ import { EmptyState, Field, LoadFailed, Panel, RowsSkeleton, SectionLabel, StatT
 import { Segmented } from "@/components/dashboard/notifications-panel"
 import { PractitionerForm, type ProfileRow } from "@/components/dashboard/practitioners/practitioner-form"
 import { SiteForm, type SiteRow } from "@/components/dashboard/practitioners/site-form"
+import { PortalAccess, type PortalFields } from "@/components/dashboard/practitioners/portal-access"
 import { cn } from "@/lib/utils"
 
 /**
@@ -324,6 +325,9 @@ export function PractitionerRegistry({ actor }: { actor: Actor }) {
                         </p>
                       </div>
                       <div className="flex shrink-0 flex-wrap items-center gap-1.5">
+                        {(p as unknown as PortalFields).portalUid ? (
+                          <Flag tone="move">{(p as unknown as PortalFields).portalActive === false ? "Portal suspended" : "Portal login"}</Flag>
+                        ) : null}
                         {expired ? <Flag tone="stop">ARCON licence expired</Flag> : null}
                         {graceCount ? <Flag tone="stop">{graceCount} in grace</Flag> : null}
                         {missing ? <Flag tone="wait">{missing} docs missing</Flag> : null}
@@ -430,6 +434,8 @@ export function PractitionerRegistry({ actor }: { actor: Actor }) {
                 <Field label="Email" value={currentProfile.email} className="col-span-2" />
               </div>
             </div>
+
+            <PortalAccess profile={currentProfile as unknown as PortalFields} />
 
             <div>
               <SectionLabel>Registration documents</SectionLabel>

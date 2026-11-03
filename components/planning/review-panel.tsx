@@ -5,7 +5,7 @@ import { limit } from "firebase/firestore"
 import { getDownloadURL, ref, uploadBytes } from "firebase/storage"
 import { Forward, Loader2, Paperclip, Square } from "lucide-react"
 import { storage } from "@/lib/firebase"
-import { DEPARTMENT, REGISTER_COLLECTION, STATUS, stage } from "@/lib/workflow"
+import { AFTER_INSPECTION, DEPARTMENT, REGISTER_COLLECTION, STATUS, stage } from "@/lib/workflow"
 import { ILLUMINATION_TYPES, STRUCTURE_TYPES, type Measurements } from "@/lib/tariff"
 import { useRealtimeCollection } from "@/hooks/use-firestore"
 import { toast } from "@/components/ui/toast"
@@ -32,6 +32,7 @@ interface TechnicalDraft extends Record<string, unknown> {
   approvedSpatialPolygon: string
   vettedBy: string
   vettingNotes: string
+  recommendation: string
 }
 
 const num = (v: string) => Number(v)
@@ -166,7 +167,7 @@ function VettingForm({ d, set, row }: { d: TechnicalDraft; set: (p: Partial<Tech
         <TextField id="pl-eng" label="COREN engineer" value={d.corenEngineerName} onChange={(v) => set({ corenEngineerName: v })} />
         <TextField id="pl-coren" label="COREN licence number" mono value={d.corenLicenseNumber} onChange={(v) => set({ corenLicenseNumber: v })} />
         <div>
-          <p className="mb-1.5 text-[12.5px] font-medium text-foreground">Structural integrity certificate</p>
+          <p className="mb-1.5 text-[12.5px] font-medium text-foreground">Existing structural certificate (optional)</p>
           <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-[12.5px] font-semibold hover:bg-muted">
             {uploading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Paperclip className="h-3.5 w-3.5" />}
             {d.structuralIntegrityCert ? "Replace PDF" : "Upload PDF"}
@@ -225,9 +226,20 @@ function VettingForm({ d, set, row }: { d: TechnicalDraft; set: (p: Partial<Tech
       </div>
 
       <FieldGrid>
-        <TextField id="pl-by" label="Vetted by" value={d.vettedBy} onChange={(v) => set({ vettedBy: v })} />
+        <TextField id="pl-by" label="Inspecting officer" value={d.vettedBy} onChange={(v) => set({ vettedBy: v })} />
+        <SelectField
+          id="pl-rec"
+          label="Recommendation to the Director"
+          value={d.recommendation}
+          onChange={(v) => set({ recommendation: v })}
+          hint="Recommended files go back to the Director, who sends the documents request letter through CSU."
+          options={[
+            { value: "Recommended", label: "Recommended — site suitable" },
+            { value: "Not recommended", label: "Not recommended" },
+          ]}
+        />
       </FieldGrid>
-      <TextareaField id="pl-notes" label="Vetting notes" value={d.vettingNotes} rows={3} onChange={(v) => set({ vettingNotes: v })} />
+      <TextareaField id="pl-notes" label="Inspection notes" value={d.vettingNotes} rows={3} onChange={(v) => set({ vettingNotes: v })} />
     </div>
   )
 }
@@ -235,7 +247,7 @@ function VettingForm({ d, set, row }: { d: TechnicalDraft; set: (p: Partial<Tech
 const draft: QueueDraft<TechnicalDraft> = {
   field: "technicalReport",
   views: ["review"],
-  title: "Planning & technical vetting",
+  title: "Site inspection report",
   initial: (row) => {
     const p = (row.technicalReport ?? {}) as Partial<TechnicalDraft>
     const [lat, lng] = (row.gpsCoordinates ?? "").split(",").map((s) => s.trim())
@@ -258,20 +270,21 @@ const draft: QueueDraft<TechnicalDraft> = {
       approvedSpatialPolygon: p.approvedSpatialPolygon ?? "",
       vettedBy: p.vettedBy ?? "",
       vettingNotes: p.vettingNotes ?? "",
+      recommendation: p.recommendation ?? "",
     }
   },
   validate: (d) => {
     if (!d.structureType || !d.illuminationType) return "Choose the structure type and illumination."
     if (!(faceArea(d) > 0)) return "Enter face height, width and number of faces."
     if (!hasNum(d.gpsLatitude) || !hasNum(d.gpsLongitude)) return "Record the GPS coordinates."
-    if (!(num(d.foundationDepthMeters) > 0)) return "Enter the foundation depth."
-    if (!d.corenEngineerName.trim() || !d.corenLicenseNumber.trim()) return "Name the COREN engineer and licence."
-    if (!d.structuralIntegrityCert) return "Upload the structural integrity certificate."
+    // Foundation, COREN and the structural certificate are vetted later from the practitioner's documents.
+    if (d.foundationDepthMeters.trim() && !(num(d.foundationDepthMeters) > 0)) return "Foundation depth must be a positive number, or leave it blank."
     if (!hasNum(d.setbackFromRoadMeters)) return "Enter the setback from the road."
     if (!d.clashDetectionStatus) return "Record the clash detection result."
     const polygon = validatePolygon(d.approvedSpatialPolygon)
     if (polygon) return polygon
-    if (!d.vettedBy.trim()) return "Name the vetting officer."
+    if (!d.vettedBy.trim()) return "Name the inspecting officer."
+    if (!d.recommendation) return "Give your recommendation to the Director."
     return null
   },
   derive: (d, _row, { now, actorId }) => {
@@ -302,26 +315,26 @@ const draft: QueueDraft<TechnicalDraft> = {
 export function PlanningQueue() {
   return (
     <WorkQueue<TechnicalDraft>
-      title="Technical vetting"
-      description="Third-party structures the Director has sent for engineering and planning review"
+      title="Site inspections"
+      description="Third-party sites the Director has sent for inspection: measure, check clashes and setbacks, and recommend"
       department={DEPARTMENT.planning}
       actorId="planning_development"
       draft={draft}
       views={[
         {
           value: "review",
-          label: "To vet",
+          label: "To inspect",
           routes: ["third"],
           statuses: stage("planningReview"),
-          empty: { title: "Nothing to vet", body: "Third-party files the Director accepts arrive here." },
+          empty: { title: "Nothing to inspect", body: "Third-party files the Director accepts arrive here for site inspection." },
           actions: [
             {
               key: "submit",
-              label: "Lock vetting — send to Director",
+              label: "Lock inspection — send to Director",
               icon: Forward,
               status: STATUS.planningReported,
               department: DEPARTMENT.director,
-              record: "Technical vetting report filed by Planning",
+              record: "Site inspection report filed by Planning & Development",
               needsDraft: true,
             },
           ],
@@ -330,16 +343,8 @@ export function PlanningQueue() {
           value: "done",
           label: "Reported",
           routes: ["third"],
-          statuses: [
-            ...stage("planningReported"),
-            ...stage("billing"),
-            ...stage("billingQueried"),
-            ...stage("billProposed"),
-            ...stage("awaitingPayment"),
-            ...stage("paymentReconciled"),
-            ...stage("issued"),
-          ],
-          empty: { title: "Nothing reported yet", body: "Reports you've returned to the Director stay here." },
+          statuses: AFTER_INSPECTION,
+          empty: { title: "Nothing reported yet", body: "Inspections you've returned to the Director stay here." },
           column: { header: "With", render: (row) => row.department ?? "—" },
         },
       ]}

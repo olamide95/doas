@@ -2,14 +2,14 @@
 
 import * as React from "react"
 import { getDownloadURL, ref, uploadBytes } from "firebase/storage"
-import { BadgeCheck, Loader2, Paperclip, Radar, ShieldAlert, SplitSquareHorizontal } from "lucide-react"
-import { storage } from "@/lib/firebase"
-import { DEPARTMENT, LEDGER_CODES, STATUS, ledgerFor, parseDate, stage } from "@/lib/workflow"
+import { BadgeCheck, Forward, Loader2, Paperclip, Radar, ShieldAlert, SplitSquareHorizontal, Zap } from "lucide-react"
+import { auth, storage } from "@/lib/firebase"
+import { AFTER_PAYMENT, APPLICANT_DESK, DEPARTMENT, LEDGER_CODES, STATUS, ledgerFor, parseDate, stage } from "@/lib/workflow"
 import { formatDate, formatDateTime, naira } from "@/lib/format"
 import { toast } from "@/components/ui/toast"
 import { ActionButton, FieldGrid, NumberField, SelectField, TextField, TextareaField } from "@/components/dashboard/form-kit"
 import { EmptyState, LoadFailed, Panel, RowsSkeleton, SectionLabel, StatusPill, TONE } from "@/components/dashboard/kit"
-import { WorkQueue, useSubmissions, type QueueDraft, type SubmissionRow } from "@/components/dashboard/work-queue"
+import { WorkQueue, useSubmissions, type QueueAction, type QueueDraft, type SubmissionRow } from "@/components/dashboard/work-queue"
 import { cn } from "@/lib/utils"
 
 interface RemitaCheck {
@@ -265,11 +265,68 @@ const paymentDraft: QueueDraft<PaymentDraft> = {
 const statusIs = (allowed: string[], message: string) => (draft: Record<string, unknown> | null) =>
   allowed.includes(String(draft?.reconciliationStatus ?? "")) ? null : message
 
+function verifyActions(row: SubmissionRow): QueueAction[] {
+  const flag: QueueAction = {
+    key: "flag",
+    label: "Flag receipt invalid",
+    tone: "danger",
+    icon: ShieldAlert,
+    status: STATUS.paymentFlagged,
+    department: DEPARTMENT.director,
+    record: "Payment flagged as invalid by Finance",
+    requiresReason: true,
+    needsDraft: true,
+    kind: "error",
+  }
+  const partial: QueueAction = {
+    key: "partial",
+    label: "Record part payment",
+    tone: "danger",
+    icon: SplitSquareHorizontal,
+    status: STATUS.partPayment,
+    department: DEPARTMENT.finance,
+    record: "Part payment recorded — balance issued",
+    needsDraft: true,
+    notify: "csu",
+    notifyApplicant: "Part payment received — a balance is due",
+    check: statusIs(["Underpaid_Shortfall"], "Set reconciliation status to Underpaid — shortfall first."),
+  }
+  const reconcile: QueueAction =
+    row.route === "third" && !row.registerId
+      ? {
+          key: "reconcile",
+          label: "Confirm payment — issue e-receipt",
+          icon: BadgeCheck,
+          status: STATUS.receiptIssued,
+          department: APPLICANT_DESK,
+          record: "Payment confirmed by Finance — e-receipt issued to the practitioner",
+          needsDraft: true,
+          kind: "success",
+          notify: "csu",
+          issue: "eReceipt",
+          notifyApplicant: "Payment confirmed — your e-receipt is ready. You can now request setting out",
+          check: statusIs(["Reconciled_Match", "Overpaid_Credit"], "Only a matched or overpaid payment can be confirmed."),
+        }
+      : {
+          key: "reconcile",
+          label: "Issue e-receipt — route to Director",
+          icon: BadgeCheck,
+          status: STATUS.paymentReconciled,
+          department: DEPARTMENT.director,
+          record: "Payment reconciled by Finance — e-receipt issued",
+          needsDraft: true,
+          kind: "success",
+          issue: "eReceipt",
+          check: statusIs(["Reconciled_Match", "Overpaid_Credit"], "Only a matched or overpaid payment can be dispatched."),
+        }
+  return [flag, partial, reconcile]
+}
+
 export function FinanceQueue() {
   return (
     <WorkQueue<PaymentDraft>
       title="Payment reconciliation"
-      description="Verify declared payments against Remita and the bank ledger"
+      description="Verify declared payments against Remita and the bank ledger, then issue the e-receipt"
       department={DEPARTMENT.finance}
       actorId="finance"
       draft={paymentDraft}
@@ -279,53 +336,153 @@ export function FinanceQueue() {
           label: "To verify",
           routes: ["first", "third"],
           statuses: stage("awaitingPayment"),
-          empty: { title: "No payments to verify", body: "Invoices the Director confirms arrive here until payment is reconciled." },
+          empty: { title: "No payments to verify", body: "Invoices sent to applicants wait here until payment is reconciled." },
           column: { header: "Expected", render: (row) => <span className="figure">{naira(expectedOf(row))}</span> },
-          actions: [
-            {
-              key: "flag",
-              label: "Flag receipt invalid",
-              tone: "danger",
-              icon: ShieldAlert,
-              status: STATUS.paymentFlagged,
-              department: DEPARTMENT.director,
-              record: "Payment flagged as invalid by Finance",
-              requiresReason: true,
-              needsDraft: true,
-              kind: "error",
-            },
-            {
-              key: "partial",
-              label: "Record part payment",
-              tone: "danger",
-              icon: SplitSquareHorizontal,
-              status: STATUS.partPayment,
-              department: DEPARTMENT.finance,
-              record: "Part payment recorded — balance issued",
-              needsDraft: true,
-              notify: "csu",
-              check: statusIs(["Underpaid_Shortfall"], "Set reconciliation status to Underpaid — shortfall first."),
-            },
-            {
-              key: "reconcile",
-              label: "Dispatch receipt — route to Director",
-              icon: BadgeCheck,
-              status: STATUS.paymentReconciled,
-              department: DEPARTMENT.director,
-              record: "Payment reconciled by Finance",
-              needsDraft: true,
-              kind: "success",
-              check: statusIs(["Reconciled_Match", "Overpaid_Credit"], "Only a matched or overpaid payment can be dispatched."),
-            },
-          ],
+          actionsFor: verifyActions,
         },
         {
           value: "done",
           label: "Reconciled",
           routes: ["first", "third"],
-          statuses: [...stage("paymentReconciled"), ...stage("issued")],
+          statuses: AFTER_PAYMENT,
           empty: { title: "Nothing reconciled yet", body: "Verified payments stay here as the receipt record." },
           column: { header: "Credited", render: (row) => <span className="figure">{naira(row.payment?.amountCredited as number)}</span> },
+        },
+      ]}
+    />
+  )
+}
+
+/* ================= Remita generation (third party) ================= */
+
+interface RemitaDraft extends Record<string, unknown> {
+  rrr: string
+  amount: number
+  generatedVia: "api" | "manual"
+  generatedAt: string
+  financeNotes: string
+}
+
+function RemitaDesk({ d, set, row }: { d: RemitaDraft; set: (p: Partial<RemitaDraft>) => void; row: SubmissionRow }) {
+  const [busy, setBusy] = React.useState(false)
+  const expected = expectedOf(row)
+
+  const generate = async () => {
+    setBusy(true)
+    try {
+      const token = await auth.currentUser?.getIdToken()
+      const res = await fetch("/api/remita/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify({ purpose: "bill", docId: row.id, route: row.route }),
+      })
+      const json = await res.json()
+      if (!res.ok) throw new Error(json.error ?? "Remita request failed")
+      if (!json.configured) {
+        toast.info({ title: "Remita API isn't configured", description: "Raise the invoice on the Remita portal and type the RRR here." })
+        return
+      }
+      if (!json.rrr) throw new Error(json.message ?? "Remita did not return an RRR")
+      set({ rrr: json.rrr, amount: Number(json.amount ?? expected), generatedVia: "api", generatedAt: new Date().toISOString() })
+      toast.success({ title: "RRR generated", description: json.rrr })
+    } catch (err) {
+      toast.error({ title: "Could not generate RRR", description: err instanceof Error ? err.message : "Try again." })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="space-y-5">
+      <div className="grid grid-cols-2 gap-3 rounded-lg bg-muted/40 p-3.5 text-[12.5px]">
+        <div>
+          <p className="text-muted-foreground">Invoice reference</p>
+          <p className="font-mono font-medium text-foreground">{String(row.billing?.invoiceNumber ?? "—")}</p>
+        </div>
+        <div className="text-right">
+          <p className="text-muted-foreground">Bill confirmed by the Director</p>
+          <p className="figure text-[18px] font-semibold text-foreground">{naira(expected)}</p>
+        </div>
+      </div>
+      <div className="flex flex-wrap items-end gap-3">
+        <div className="min-w-[220px] flex-1">
+          <TextField id="rm-rrr" label="Remita retrieval reference (RRR)" mono value={d.rrr} placeholder="12 digits" onChange={(v) => set({ rrr: v, generatedVia: "manual" })} />
+        </div>
+        <ActionButton tone="quiet" icon={busy ? Loader2 : Zap} disabled={busy} onClick={generate}>
+          Generate via Remita
+        </ActionButton>
+      </div>
+      <FieldGrid columns={2}>
+        <NumberField id="rm-amt" label="Invoice amount" prefix="₦" value={d.amount} onChange={(v) => set({ amount: v })} hint="Must equal the confirmed bill" />
+        <TextField id="rm-at" label="Generated" value={d.generatedAt ? formatDateTime(d.generatedAt) : ""} onChange={() => undefined} hint={d.generatedVia === "api" ? "Remita API" : "Entered manually"} />
+      </FieldGrid>
+      <TextareaField id="rm-notes" label="Finance notes" rows={2} value={d.financeNotes} onChange={(v) => set({ financeNotes: v })} />
+    </div>
+  )
+}
+
+const remitaDraft: QueueDraft<RemitaDraft> = {
+  field: "remita",
+  views: ["raise"],
+  title: "Raise Remita invoice",
+  initial: (row) => {
+    const r = (row.remita ?? {}) as Partial<RemitaDraft> & { lastGenerated?: { rrr?: string; amount?: number; at?: string } }
+    return {
+      rrr: r.rrr ?? r.lastGenerated?.rrr ?? "",
+      amount: Number(r.amount ?? r.lastGenerated?.amount ?? expectedOf(row)),
+      generatedVia: r.generatedVia ?? (r.lastGenerated?.rrr ? "api" : "manual"),
+      generatedAt: r.generatedAt ?? r.lastGenerated?.at ?? "",
+      financeNotes: r.financeNotes ?? "",
+    }
+  },
+  validate: (d, row) => {
+    if (digits(d.rrr).length !== 12) return "Enter or generate the 12-digit RRR."
+    if (Math.abs(Number(d.amount) - expectedOf(row)) >= 1) return `The invoice amount must equal the confirmed bill (${naira(expectedOf(row))}).`
+    return null
+  },
+  derive: (d, _row, { now, actorId }) => ({
+    remita: { ...d, rrr: digits(d.rrr), generatedAt: d.generatedAt || now, raisedBy: actorId },
+  }),
+  render: (d, set, row) => <RemitaDesk d={d} set={set} row={row} />,
+}
+
+export function RemitaQueue() {
+  return (
+    <WorkQueue<RemitaDraft>
+      title="Remita invoices"
+      description="Bills the Director has confirmed — raise the Remita RRR and send it to CSU for the practitioner"
+      department={DEPARTMENT.finance}
+      actorId="finance"
+      draft={remitaDraft}
+      views={[
+        {
+          value: "raise",
+          label: "To raise",
+          routes: ["first", "third"],
+          statuses: stage("billApproved"),
+          empty: { title: "No bills to raise", body: "When the Director confirms a third-party bill it arrives here." },
+          column: { header: "Bill", render: (row) => <span className="figure">{naira(expectedOf(row))}</span> },
+          actions: [
+            {
+              key: "send-rrr",
+              label: "Send RRR to CSU",
+              icon: Forward,
+              status: STATUS.remitaGenerated,
+              department: DEPARTMENT.csu,
+              record: "Remita invoice raised by Finance — sent to CSU",
+              notify: "csu",
+              needsDraft: true,
+            },
+          ],
+        },
+        {
+          value: "sent",
+          label: "Raised",
+          routes: ["first", "third"],
+          statuses: [...stage("remitaGenerated"), ...stage("awaitingPayment"), ...AFTER_PAYMENT],
+          filter: (row) => Boolean(row.remita?.rrr),
+          empty: { title: "Nothing raised yet", body: "RRRs you've raised stay here for reference." },
+          column: { header: "RRR", render: (row) => <span className="font-mono text-[11.5px]">{String(row.remita?.rrr ?? "")}</span> },
         },
       ]}
     />

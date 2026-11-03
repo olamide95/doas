@@ -54,4 +54,10 @@ export const COL = {
   register: "permitRegister",
   tariffs: "tariffSchedules",
   compliance: "complianceIssues",
+  // Practitioner portal
+  portalUsers: "portalUsers",
+  announcements: "announcements",
+  issuedDocuments: "issuedDocuments",
+  // Staff administration
+  nominalRoll: "nominalRoll",
 } as const

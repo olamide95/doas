@@ -1,11 +1,25 @@
 "use client"
 
 import * as React from "react"
-import { addDoc, arrayUnion, collection, doc, limit, orderBy, updateDoc } from "firebase/firestore"
+import { addDoc, arrayUnion, collection, doc, limit, orderBy, updateDoc, type DocumentData, type UpdateData } from "firebase/firestore"
 import type { LucideIcon } from "lucide-react"
-import { Check, Inbox, Lock, MapPin } from "lucide-react"
+import { Check, ExternalLink, FileBadge2, Inbox, Lock, MapPin, ShieldCheck } from "lucide-react"
 import { COL, db } from "@/lib/firebase"
-import { REGISTER_COLLECTION, STATUS, expiryFrom, isBlocked, notifyIdFor, permitNumber, stageIndex, stagesFor, type RegisterCategory } from "@/lib/workflow"
+import {
+  REGISTER_COLLECTION,
+  STATUS,
+  VETTING_TRACKS,
+  expiryFrom,
+  isBlocked,
+  notifyIdFor,
+  permitNumber,
+  practitionerAudience,
+  stageIndex,
+  stagesFor,
+  type RegisterCategory,
+  type VettingTrackState,
+} from "@/lib/workflow"
+import { ISSUED_META, documentPath, issueDocument, type IssuedKind, type IssuedSummary } from "@/lib/issued-documents"
 import { isLit, typeLabel, type Measurements } from "@/lib/tariff"
 import { useMergedCollections } from "@/hooks/use-firestore"
 import { formatDate, formatDateTime, naira, toMillis, truncate } from "@/lib/format"
@@ -67,6 +81,31 @@ export interface SubmissionRow {
   inspectionReport?: Record<string, unknown>
   files?: Record<string, unknown>
   documents?: Record<string, unknown>
+  // Practitioner portal
+  source?: string
+  practitionerUid?: string
+  practitionerId?: string
+  doasPractitionerId?: string
+  district?: string
+  lightingType?: string
+  numberOfFaces?: string
+  announcementId?: string
+  announcementTitle?: string
+  applicationFee?: {
+    amount?: number
+    rrr?: string
+    receiptUrl?: string
+    verified?: boolean
+    verifiedAmount?: number | null
+    transactionTime?: string | null
+    checkedAt?: string
+    confirmedByCsu?: boolean
+  }
+  vetting?: Record<string, VettingTrackState>
+  remita?: Record<string, unknown>
+  issued?: Partial<Record<IssuedKind, IssuedSummary>>
+  settingOutRequest?: Record<string, unknown>
+  settingOutReport?: Record<string, unknown>
   comments?: AuditEntry[]
   createdAt?: unknown
   updatedAt?: unknown
@@ -82,6 +121,8 @@ export interface QueueAction {
   /** Text recorded in the audit trail. */
   record: string
   notify?: string
+  /** Further desks to notify (e.g. both vetting units). */
+  alsoNotify?: string[]
   kind?: "success" | "error" | "info"
   needsDraft?: boolean
   requiresReason?: boolean
@@ -89,6 +130,12 @@ export interface QueueAction {
   check?: (draft: Record<string, unknown> | null, row: SubmissionRow) => string | null
   /** Final sign-off: issue the permit and write/refresh the register entry. */
   register?: RegisterCategory
+  /** Issue a letter, receipt or certificate (QR + barcode) and attach it to the file. */
+  issue?: IssuedKind
+  /** Message for the practitioner's portal notifications. */
+  notifyApplicant?: string
+  /** Extra fields written with the move (e.g. resetting vetting tracks). */
+  patch?: (row: SubmissionRow, ctx: { now: string; actorId: string; note: string }) => Record<string, unknown>
 }
 
 export interface QueueView {
@@ -100,6 +147,8 @@ export interface QueueView {
   actions?: QueueAction[]
   actionsFor?: (row: SubmissionRow) => QueueAction[]
   column?: { header: string; render: (row: SubmissionRow) => React.ReactNode }
+  /** Extra row filter on top of routes/statuses. */
+  filter?: (row: SubmissionRow) => boolean
 }
 
 export interface QueueDraft<T extends Record<string, unknown>> {
@@ -132,7 +181,8 @@ export function collectionFor(route: Route) {
 export function matches(row: SubmissionRow, view: QueueView, department?: string) {
   if (!view.routes.includes(row.route)) return false
   if (department && row.department !== department) return false
-  return view.statuses.includes(row.status ?? "")
+  if (!view.statuses.includes(row.status ?? "")) return false
+  return view.filter ? view.filter(row) : true
 }
 
 interface WorkQueueProps<T extends Record<string, unknown>> {
@@ -226,6 +276,7 @@ export function WorkQueue<T extends Record<string, unknown>>({ title, descriptio
     }
 
     if (action.requiresReason) payload[isBlocked(action.status) ? "directorReason" : "deskQuery"] = note.trim()
+    if (action.patch) Object.assign(payload, action.patch(selected, { now, actorId, note: note.trim() }))
 
     if (action.needsDraft && draft && draftValue) {
       payload[draft.field] = { ...draftValue, submittedAt: now, submittedBy: actorId }
@@ -245,7 +296,26 @@ export function WorkQueue<T extends Record<string, unknown>>({ title, descriptio
 
     try {
       const ref = doc(db, collectionFor(selected.route), selected.id)
-      await updateDoc(ref, payload)
+
+      let issuedCode: string | null = null
+      if (action.issue) {
+        const source = { ...selected, ...(action.needsDraft && draft && draftValue ? { [draft.field]: draftValue } : {}) } as unknown as Record<string, unknown> & {
+          id: string
+          route: Route
+        }
+        const issued = await issueDocument(action.issue, source, {
+          now,
+          actorId,
+          permit,
+          validFrom: startsAt || undefined,
+          validTo: expiresAt || undefined,
+          note: note.trim() || undefined,
+        })
+        payload[`issued.${action.issue}`] = issued
+        issuedCode = issued.code
+      }
+
+      await updateDoc(ref, payload as UpdateData<DocumentData>)
 
       if (action.register && permit) {
         const billing = (selected.billing ?? {}) as Record<string, unknown>
@@ -285,16 +355,34 @@ export function WorkQueue<T extends Record<string, unknown>>({ title, descriptio
 
       await addDoc(collection(db, COL.activity), { submissionId: selected.id, action: action.record, comment: note, timestamp: now, userId: actorId })
 
-      await addDoc(collection(db, COL.notifications), {
-        userId: action.notify ?? notifyIdFor(action.department),
-        content: `${action.record} — ${selected.companyName ?? selected.applicantName ?? "application"}${note.trim() ? `: ${note.trim()}` : ""}`,
-        type: action.kind ?? "info",
-        referenceId: selected.id,
-        isRead: false,
-        createdAt: now,
-      })
+      for (const audience of [action.notify ?? notifyIdFor(action.department), ...(action.alsoNotify ?? [])]) {
+        await addDoc(collection(db, COL.notifications), {
+          userId: audience,
+          content: `${action.record} — ${selected.companyName ?? selected.applicantName ?? "application"}${note.trim() ? `: ${note.trim()}` : ""}`,
+          type: action.kind ?? "info",
+          referenceId: selected.id,
+          isRead: false,
+          createdAt: now,
+        })
+      }
 
-      toast.success({ title: action.record, description: permit ? `Permit ${permit}` : selected.submissionId })
+      if (selected.practitionerUid && (action.notifyApplicant || action.issue)) {
+        await addDoc(collection(db, COL.notifications), {
+          userId: practitionerAudience(selected.practitionerUid),
+          title: action.issue ? ISSUED_META[action.issue].short : "Application update",
+          // Reasons (returns, declines) are shown to the practitioner; internal desk notes are not.
+          content: `${action.notifyApplicant ?? `${ISSUED_META[action.issue as IssuedKind].short} issued`} — ${selected.submissionId ?? ""}${
+            action.requiresReason && note.trim() ? `: ${note.trim()}` : ""
+          }`,
+          type: action.kind ?? "info",
+          referenceId: selected.id,
+          documentCode: issuedCode ?? "",
+          isRead: false,
+          createdAt: now,
+        })
+      }
+
+      toast.success({ title: action.record, description: permit ? `Permit ${permit}` : issuedCode ? `Document ${issuedCode}` : selected.submissionId })
       close()
     } catch (err) {
       toast.error({ title: "Action not saved", description: err instanceof Error ? err.message : "Try again in a moment." })
@@ -368,6 +456,10 @@ export function WorkQueue<T extends Record<string, unknown>>({ title, descriptio
             ) : null}
 
             {extraDetail?.(selected)}
+            <ApplicationFeeSummary row={selected} />
+            <IssuedDocuments row={selected} />
+            <VettingSummary row={selected} />
+            <SettingOutSummary row={selected} />
             <ExistingReports row={selected} />
             <Attachments row={selected} />
             <AuditTimeline row={selected} />
@@ -513,6 +605,8 @@ export function ApplicationSummary({ row }: { row: SubmissionRow }) {
         <Field label="Declared number of signs" value={row.numberOfSigns} />
         {row.practitionerName ? <Field label="Practitioner" value={row.practitionerName} /> : null}
         {row.practitionerLicenseNumber ? <Field label="Licence" value={row.practitionerLicenseNumber} mono /> : null}
+        {row.doasPractitionerId ? <Field label="DOAS practitioner ID" value={row.doasPractitionerId} mono /> : null}
+        {row.announcementTitle ? <Field label="Applied from announcement" value={row.announcementTitle} /> : null}
       </div>
     </div>
   )
@@ -570,7 +664,7 @@ function ExistingReports({ row }: { row: SubmissionRow }) {
 
       {tech ? (
         <div>
-          <SectionLabel>Planning technical vetting</SectionLabel>
+          <SectionLabel>{row.route === "third" ? "Planning site inspection" : "Planning technical vetting"}</SectionLabel>
           <div className="grid grid-cols-2 gap-4">
             <Field label="Structure" value={typeLabel(String(tech.structureType ?? ""))} />
             <Field label="Foundation depth" value={tech.foundationDepthMeters ? `${tech.foundationDepthMeters} m` : ""} />
@@ -590,6 +684,7 @@ function ExistingReports({ row }: { row: SubmissionRow }) {
                 }
               />
             ) : null}
+            {tech.recommendation ? <Field label="Recommendation" value={<StatusPill status={String(tech.recommendation)} />} /> : null}
             <Field label="Notes" value={String(tech.vettingNotes ?? "")} className="col-span-2" />
           </div>
         </div>
@@ -627,7 +722,216 @@ function ExistingReports({ row }: { row: SubmissionRow }) {
           </div>
         </div>
       ) : null}
+
+      {row.remita?.rrr ? (
+        <div>
+          <SectionLabel>Remita invoice (Finance)</SectionLabel>
+          <div className="grid grid-cols-2 gap-4">
+            <Field label="RRR" value={String(row.remita.rrr)} mono />
+            <Field label="Amount" value={naira(row.remita.amount as number)} />
+            <Field label="Generated" value={formatDateTime(row.remita.generatedAt)} />
+            <Field label="Via" value={String(row.remita.generatedVia ?? "") === "api" ? "Remita API" : "Remita portal (manual)"} />
+          </div>
+        </div>
+      ) : null}
     </>
+  )
+}
+
+function ApplicationFeeSummary({ row }: { row: SubmissionRow }) {
+  const fee = row.applicationFee
+  if (!fee?.rrr) return null
+  return (
+    <div>
+      <SectionLabel>Application fee</SectionLabel>
+      <div className="grid grid-cols-2 gap-4">
+        <Field label="Fee" value={naira(fee.amount)} />
+        <Field label="Remita RRR" value={fee.rrr} mono />
+        <Field
+          label="Remita check"
+          value={
+            fee.verified ? (
+              <span className={cn("inline-flex items-center gap-1 font-semibold", "text-[hsl(var(--state-clear))]")}>
+                <ShieldCheck className="h-3.5 w-3.5" /> Settled{fee.verifiedAmount ? ` · ${naira(fee.verifiedAmount)}` : ""}
+              </span>
+            ) : (
+              <span className="font-semibold text-[hsl(var(--state-wait))]">Not confirmed by Remita — check the receipt</span>
+            )
+          }
+        />
+        <Field label="Checked" value={formatDateTime(fee.checkedAt)} />
+        {!fee.verified ? (
+          <div className="col-span-2">
+            <FeeRecheck row={row} />
+          </div>
+        ) : null}
+        {fee.receiptUrl ? (
+          <Field
+            label="Receipt uploaded"
+            value={
+              <a href={fee.receiptUrl} target="_blank" rel="noopener noreferrer" className="font-semibold text-accent underline-offset-4 hover:underline">
+                Open receipt
+              </a>
+            }
+          />
+        ) : null}
+      </div>
+    </div>
+  )
+}
+
+function FeeRecheck({ row }: { row: SubmissionRow }) {
+  const [busy, setBusy] = React.useState(false)
+  const [message, setMessage] = React.useState("")
+  const fee = row.applicationFee
+  const check = async () => {
+    if (!fee?.rrr) return
+    setBusy(true)
+    try {
+      const res = await fetch(`/api/remita/verify?rrr=${fee.rrr}`)
+      const json = await res.json()
+      if (!json.configured) {
+        setMessage("Remita API isn't configured — confirm the uploaded receipt against the Remita portal.")
+        return
+      }
+      const enough = (json.amount ?? 0) + 0.5 >= Number(fee.amount ?? 0)
+      if (json.paid && enough) {
+        await updateDoc(doc(db, collectionFor(row.route), row.id), {
+          "applicationFee.verified": true,
+          "applicationFee.verifiedAmount": json.amount ?? null,
+          "applicationFee.checkedAt": new Date().toISOString(),
+          "applicationFee.checkedBy": "csu",
+        })
+        setMessage(`Settled: ${naira(json.amount)}.`)
+      } else setMessage(json.paid ? `Paid ${naira(json.amount)} — less than the ${naira(fee.amount)} fee.` : `Not settled${json.message ? ` (${json.message})` : ""}.`)
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : "Check failed.")
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <div className="flex flex-wrap items-center gap-3">
+      <ActionButton tone="quiet" icon={ShieldCheck} disabled={busy} onClick={check}>
+        {busy ? "Checking…" : "Check fee with Remita"}
+      </ActionButton>
+      {message ? <span className="text-[12.5px] text-muted-foreground">{message}</span> : null}
+    </div>
+  )
+}
+
+export function IssuedDocuments({ row }: { row: SubmissionRow }) {
+  const entries = Object.entries(row.issued ?? {}).filter(([, v]) => v?.code) as [IssuedKind, IssuedSummary][]
+  if (!entries.length) return null
+  return (
+    <div>
+      <SectionLabel>Issued documents</SectionLabel>
+      <ul className="space-y-2">
+        {entries.map(([kind, d]) => (
+          <li key={kind} className="flex items-center justify-between gap-3 rounded-lg border border-border px-3.5 py-2.5">
+            <span className="min-w-0">
+              <span className="flex items-center gap-1.5 text-[13px] font-medium text-foreground">
+                <FileBadge2 className="h-3.5 w-3.5" /> {ISSUED_META[kind]?.short ?? kind}
+              </span>
+              <span className="block truncate font-mono text-[11.5px] text-muted-foreground">
+                {d.code} · {formatDateTime(d.issuedAt)}
+              </span>
+            </span>
+            <a
+              href={documentPath(d.code)}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex shrink-0 items-center gap-1 text-[12.5px] font-semibold text-accent underline-offset-4 hover:underline"
+            >
+              Open <ExternalLink className="h-3 w-3" />
+            </a>
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+
+function VettingSummary({ row }: { row: SubmissionRow }) {
+  const vetting = row.vetting
+  if (!vetting) return null
+  return (
+    <div>
+      <SectionLabel>Technical vetting</SectionLabel>
+      <ul className="space-y-2">
+        {VETTING_TRACKS.map((t) => {
+          const track = vetting[t.key]
+          if (!track) return null
+          return (
+            <li key={t.key} className="rounded-lg border border-border px-3.5 py-2.5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-[13px] font-semibold text-foreground">
+                  {t.label} <span className="font-normal text-muted-foreground">· {t.department}</span>
+                </p>
+                <StatusPill status={track.state} />
+              </div>
+              <div className="mt-1.5 grid grid-cols-2 gap-x-4 gap-y-1 text-[12px] text-muted-foreground">
+                <span>Officer: {track.assignedToName || "—"}</span>
+                <span>Confirmed by: {track.confirmedByName || "—"}</span>
+                {track.report ? (
+                  <span className="col-span-2">
+                    Finding: <span className="font-semibold text-foreground">{track.report.recommendation || "—"}</span> — {truncate(track.report.findings, 140)}
+                  </span>
+                ) : null}
+                {track.headNote ? <span className="col-span-2">Head of unit: {track.headNote}</span> : null}
+                {track.returnReason && track.state === "returned" ? <span className="col-span-2 text-[hsl(var(--state-stop))]">Returned: {track.returnReason}</span> : null}
+              </div>
+              <div className="mt-1.5 flex flex-wrap gap-3 text-[12px]">
+                {track.documentUrl ? (
+                  <a href={track.documentUrl} target="_blank" rel="noopener noreferrer" className="font-semibold text-accent underline-offset-4 hover:underline">
+                    Document
+                  </a>
+                ) : null}
+                {track.report?.attachmentUrl ? (
+                  <a href={track.report.attachmentUrl} target="_blank" rel="noopener noreferrer" className="font-semibold text-accent underline-offset-4 hover:underline">
+                    Vetting attachment
+                  </a>
+                ) : null}
+              </div>
+            </li>
+          )
+        })}
+      </ul>
+    </div>
+  )
+}
+
+function SettingOutSummary({ row }: { row: SubmissionRow }) {
+  const req = row.settingOutRequest
+  const rep = row.settingOutReport
+  if (!req && !rep) return null
+  const photos = Array.isArray(rep?.photos) ? (rep?.photos as string[]) : []
+  return (
+    <div>
+      <SectionLabel>Setting out</SectionLabel>
+      <div className="grid grid-cols-2 gap-4">
+        {req ? (
+          <>
+            <Field label="Requested" value={formatDateTime(req.requestedAt)} />
+            <Field label="Preferred date" value={formatDate(req.preferredDate)} />
+            <Field label="Site contact" value={`${String(req.contactName ?? "")} ${req.contactPhone ? `· ${String(req.contactPhone)}` : ""}`} />
+            {req.note ? <Field label="Practitioner note" value={String(req.note)} /> : null}
+          </>
+        ) : null}
+        {rep ? (
+          <>
+            <Field label="Set out on" value={formatDate(rep.settingOutDate)} />
+            <Field label="Officer" value={String(rep.officerName ?? "")} />
+            <Field label="Coordinates set out" value={String(rep.confirmedCoordinates ?? "")} mono />
+            <Field label="Setback" value={rep.setbackMeters ? `${String(rep.setbackMeters)} m` : ""} />
+            <Field label="Pegs / beacons placed" value={rep.pegsPlaced ? "Yes" : "No"} />
+            <Field label="Recommendation" value={<StatusPill status={String(rep.recommendation ?? "")} />} />
+            <Field label="Observations" value={String(rep.observations ?? "")} className="col-span-2" />
+          </>
+        ) : null}
+      </div>
+      <PhotoGrid urls={photos} />
+    </div>
   )
 }
 

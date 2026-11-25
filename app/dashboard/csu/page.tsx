@@ -179,7 +179,7 @@ export default function CSUDashboard() {
 
       {tab === "practitioners" ? (
         <div className="space-y-5">
-          <PageHeading title="Practitioners" description="Digitise practitioner files and their site inventory, and create their portal logins." />
+          <PageHeading title="Practitioners" description="Digitise practitioner files and their site inventory, create their portal logins, and generate practising licences." />
           <PractitionerRegistry actor="csu" />
         </div>
       ) : null}

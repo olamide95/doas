@@ -87,6 +87,11 @@ export async function POST(req: Request) {
       createdByDesk: caller.department,
     })
     await profileRef.update({ portalUid: uid, portalEmail: email, portalActive: true, portalCreatedAt: now, portalCreatedBy: caller.department })
+    // A licence generated before the login existed now shows in their portal documents.
+    const licenceCode = String((profile.practisingLicence as { code?: string } | undefined)?.code ?? "")
+    if (licenceCode) {
+      await adminDb().collection("issuedDocuments").doc(licenceCode).set({ practitionerUid: uid }, { merge: true }).catch(() => undefined)
+    }
     await adminDb().collection("activityLogs").add({
       module: "practitioner-portal",
       practitionerId,

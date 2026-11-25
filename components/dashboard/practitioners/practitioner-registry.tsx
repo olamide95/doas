@@ -37,6 +37,7 @@ import { Segmented } from "@/components/dashboard/notifications-panel"
 import { PractitionerForm, type ProfileRow } from "@/components/dashboard/practitioners/practitioner-form"
 import { SiteForm, type SiteRow } from "@/components/dashboard/practitioners/site-form"
 import { PortalAccess, type PortalFields } from "@/components/dashboard/practitioners/portal-access"
+import { LicenceRegister, PractisingLicencePanel, type LicenceFields } from "@/components/dashboard/practitioners/practising-licence"
 import { cn } from "@/lib/utils"
 
 /**
@@ -132,7 +133,7 @@ export function PractitionerRegistry({ actor }: { actor: Actor }) {
   const profiles = useRealtimeCollection<PractitionerProfile>(PRACTITIONER_COL.profiles, [orderBy("companyName"), limit(1000)], [])
   const sites = useRealtimeCollection<SiteFile>(PRACTITIONER_COL.sites, [orderBy("createdAt", "desc"), limit(5000)], [])
 
-  const [mode, setMode] = React.useState<"practitioners" | "sites">("practitioners")
+  const [mode, setMode] = React.useState<"practitioners" | "sites" | "licences">("practitioners")
   const [search, setSearch] = React.useState("")
   const [siteFilter, setSiteFilter] = React.useState<SiteFilter>("all")
   const [profileSiteTab, setProfileSiteTab] = React.useState<"live" | "archived">("live")
@@ -253,6 +254,7 @@ export function PractitionerRegistry({ actor }: { actor: Actor }) {
               options={[
                 { value: "practitioners", label: "Practitioners" },
                 { value: "sites", label: "All sites" },
+                { value: "licences", label: "Licences" },
               ]}
             />
             <ActionButton icon={Plus} onClick={() => setView({ kind: "editProfile", id: null })}>
@@ -268,7 +270,13 @@ export function PractitionerRegistry({ actor }: { actor: Actor }) {
             <input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder={mode === "practitioners" ? "Search name, RC, DOAS ID, email…" : "Search reference, practitioner, district, demand notice…"}
+              placeholder={
+                mode === "practitioners"
+                  ? "Search name, RC, DOAS ID, email…"
+                  : mode === "licences"
+                    ? "Search practitioner, licence number, verification code…"
+                    : "Search reference, practitioner, district, demand notice…"
+              }
               className="w-full rounded-lg border border-border bg-background py-2 pl-9 pr-3 text-[13px] outline-none focus:border-primary focus:ring-2 focus:ring-primary/15"
             />
           </div>
@@ -293,6 +301,8 @@ export function PractitionerRegistry({ actor }: { actor: Actor }) {
           <LoadFailed error={error} what="The practitioner registry" />
         ) : loading ? (
           <RowsSkeleton rows={5} columns={3} />
+        ) : mode === "licences" ? (
+          <LicenceRegister profiles={profileRows as unknown as LicenceFields[]} search={search} />
         ) : mode === "practitioners" ? (
           !practitionerList.length ? (
             <EmptyState
@@ -327,6 +337,13 @@ export function PractitionerRegistry({ actor }: { actor: Actor }) {
                       <div className="flex shrink-0 flex-wrap items-center gap-1.5">
                         {(p as unknown as PortalFields).portalUid ? (
                           <Flag tone="move">{(p as unknown as PortalFields).portalActive === false ? "Portal suspended" : "Portal login"}</Flag>
+                        ) : null}
+                        {(p as unknown as LicenceFields).practisingLicence ? (
+                          (p as unknown as LicenceFields).practisingLicence?.status === "revoked" ? (
+                            <Flag tone="stop">Licence revoked</Flag>
+                          ) : (
+                            <Flag tone="move">Licensed · {(p as unknown as LicenceFields).practisingLicence?.licenceNumber}</Flag>
+                          )
                         ) : null}
                         {expired ? <Flag tone="stop">ARCON licence expired</Flag> : null}
                         {graceCount ? <Flag tone="stop">{graceCount} in grace</Flag> : null}
@@ -434,6 +451,8 @@ export function PractitionerRegistry({ actor }: { actor: Actor }) {
                 <Field label="Email" value={currentProfile.email} className="col-span-2" />
               </div>
             </div>
+
+            <PractisingLicencePanel profile={currentProfile as unknown as LicenceFields} />
 
             <PortalAccess profile={currentProfile as unknown as PortalFields} />
 

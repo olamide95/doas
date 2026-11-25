@@ -74,7 +74,7 @@ export default function DirectorDashboard() {
       {tab === "register" ? <RegisterPanel /> : null}
       {tab === "practitioners" ? (
         <div className="space-y-5">
-          <PageHeading title="Practitioners" description="Third-party practitioners and every structure they operate, digitised from the physical files." />
+          <PageHeading title="Practitioners" description="Third-party practitioners, every structure they operate, and their practising licences." />
           <PractitionerRegistry actor="director" />
         </div>
       ) : null}

@@ -1,6 +1,8 @@
 /**
  * Documents DOAS issues to applicants: the documents-request letter, the
- * e-receipt, the setting-out certificate and the approval letter.
+ * e-receipt, the setting-out certificate and the approval letter. The
+ * practitioner's practising licence lives in the same collection (written by
+ * /api/practitioners/licence) so it verifies the same way.
  *
  * Each one is a Firestore doc at issuedDocuments/{code}. The code is printed
  * on the document as a Code-128 barcode and inside a QR code that opens
@@ -14,13 +16,15 @@ import { COL, db } from "@/lib/firebase"
 import { REQUIRED_DOCUMENTS } from "@/lib/workflow"
 import { naira } from "@/lib/format"
 
-export type IssuedKind = "documentsRequestLetter" | "eReceipt" | "settingOutCertificate" | "approvalLetter"
+export type IssuedKind = "documentsRequestLetter" | "eReceipt" | "settingOutCertificate" | "approvalLetter" | "practisingLicence"
 
 export const ISSUED_META: Record<IssuedKind, { title: string; prefix: string; short: string }> = {
   documentsRequestLetter: { title: "Request for Technical Documents", prefix: "LTR", short: "Documents request letter" },
   eReceipt: { title: "Official E-Receipt", prefix: "RCT", short: "E-receipt" },
   settingOutCertificate: { title: "Setting-Out Certificate", prefix: "SOC", short: "Setting-out certificate" },
   approvalLetter: { title: "Letter of Approval", prefix: "APL", short: "Approval letter" },
+  // Issued from a practitioner's file, not from a submission — see lib/practising-licence.ts.
+  practisingLicence: { title: "Practising Licence", prefix: "LIC", short: "Practising licence" },
 }
 
 export interface IssuedFact {

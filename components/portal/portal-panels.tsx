@@ -184,7 +184,7 @@ function DocumentList({ rows }: { rows: ReturnType<typeof usePortalDocuments>["r
               <FileText className="h-3.5 w-3.5" /> {ISSUED_META[d.kind]?.title ?? d.title}
             </span>
             <span className="block text-[12px] text-muted-foreground">
-              {d.submissionId} · {truncate(d.siteAddress, 50)} · {formatDate(d.issuedAt)}
+              {d.kind === "practisingLicence" ? `Licence No. ${d.reference} · ${d.holderName}` : `${d.submissionId} · ${truncate(d.siteAddress, 50)}`} · {formatDate(d.issuedAt)}
             </span>
           </span>
           <span className="flex shrink-0 items-center gap-2">

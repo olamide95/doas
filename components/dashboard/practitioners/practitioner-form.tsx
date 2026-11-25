@@ -156,15 +156,17 @@ export function PractitionerForm({
         updatedAt: now,
         updatedBy: actor,
       }
-      // Keep the portal-login fields this form doesn't own (set by /api/practitioners/account).
+      // Keep the fields this form doesn't own: the portal login (/api/practitioners/account)
+      // and the practising licence (/api/practitioners/licence).
       const keep: Record<string, unknown> = {}
       if (existing) {
-        for (const key of ["portalUid", "portalEmail", "portalActive", "portalCreatedAt", "portalCreatedBy", "portalUpdatedAt", "portalPasswordResetAt"]) {
+        for (const key of ["portalUid", "portalEmail", "portalActive", "portalCreatedAt", "portalCreatedBy", "portalUpdatedAt", "portalPasswordResetAt", "practisingLicence"]) {
           const value = (existing as unknown as Record<string, unknown>)[key]
           if (value !== undefined) keep[key] = value
         }
       }
-      await setDoc(ref, { ...keep, ...record })
+      // `keep` goes last: it is read from the live record, the draft may be older.
+      await setDoc(ref, { ...record, ...keep })
 
       await logActivity({
         actor,

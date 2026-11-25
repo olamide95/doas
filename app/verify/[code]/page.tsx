@@ -5,12 +5,15 @@ import { useParams } from "next/navigation"
 import { BadgeCheck, ExternalLink, Loader2, ShieldAlert } from "lucide-react"
 import { ISSUED_META, documentPath } from "@/lib/issued-documents"
 import { useIssuedDocument } from "@/components/documents/document-view"
+import { LICENCE_CATEGORY, formatIssueDate, isLicence } from "@/lib/practising-licence"
 
 /** Opened by scanning a document's QR code, or from /verify. */
 export default function VerifyDocumentPage() {
   const params = useParams<{ code: string }>()
   const code = decodeURIComponent(params?.code ?? "").trim().toUpperCase()
   const { loading, doc: d } = useIssuedDocument(code)
+  const licence = isLicence(d) ? d : null
+  const revoked = d?.status === "revoked"
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-neutral-100 px-4 py-10">
@@ -32,12 +35,35 @@ export default function VerifyDocumentPage() {
           <div className="py-4">
             <div className="text-center">
               {d.status === "revoked" ? <ShieldAlert className="mx-auto h-10 w-10 text-red-600" /> : <BadgeCheck className="mx-auto h-10 w-10 text-emerald-700" />}
-              <p className={`mt-3 text-[17px] font-semibold ${d.status === "revoked" ? "text-red-700" : "text-emerald-800"}`}>
-                {d.status === "revoked" ? "This document has been revoked" : "Genuine — issued by DOAS"}
+              <p className={`mt-3 text-[17px] font-semibold ${revoked ? "text-red-700" : "text-emerald-800"}`}>
+                {licence
+                  ? revoked
+                    ? "This practising licence has been revoked"
+                    : "Genuine — practising licence issued by DOAS"
+                  : revoked
+                    ? "This document has been revoked"
+                    : "Genuine — issued by DOAS"}
               </p>
+              {licence ? (
+                <p className="mt-1 text-[13px] text-neutral-600">
+                  {revoked
+                    ? "It is no longer valid. Contact DOAS before dealing with the holder as a licensed practitioner."
+                    : "Check that the name, licence number and date below match the certificate in front of you."}
+                </p>
+              ) : null}
             </div>
             <dl className="mt-5 space-y-2 text-[13px]">
-              {[
+              {(licence
+                ? [
+                    ["Document", "Practising Licence"],
+                    ["Licensed practitioner", licence.holderName],
+                    ["Licence No.", licence.licenceNumber],
+                    ["Category", licence.licenceCategory || LICENCE_CATEGORY],
+                    ["Date of issue", formatIssueDate(licence.issueDate)],
+                    ["Status", revoked ? "Revoked" : "Valid"],
+                    ["Verification code", licence.code],
+                  ]
+                : [
                 ["Document", ISSUED_META[d.kind]?.title ?? d.title],
                 ["Code", d.code],
                 ["Reference", d.reference],
@@ -47,7 +73,7 @@ export default function VerifyDocumentPage() {
                 ...(d.permitNumber ? [["Permit number", d.permitNumber]] : []),
                 ...(d.validFrom && d.validTo ? [["Valid", `${d.validFrom} to ${d.validTo}`]] : []),
                 ["Issued", new Date(d.issuedAt).toLocaleString("en-NG")],
-              ].map(([k, v]) => (
+              ]).map(([k, v]) => (
                 <div key={k} className="flex justify-between gap-4 border-b border-neutral-100 pb-1.5">
                   <dt className="text-neutral-500">{k}</dt>
                   <dd className="text-right font-medium text-neutral-900">{v}</dd>
@@ -58,7 +84,7 @@ export default function VerifyDocumentPage() {
               href={documentPath(d.code)}
               className="mt-5 inline-flex w-full items-center justify-center gap-1.5 rounded-lg bg-emerald-800 px-3 py-2.5 text-[13px] font-semibold text-white hover:bg-emerald-900"
             >
-              View the full document <ExternalLink className="h-3.5 w-3.5" />
+              {licence ? "View the licence" : "View the full document"} <ExternalLink className="h-3.5 w-3.5" />
             </Link>
           </div>
         )}

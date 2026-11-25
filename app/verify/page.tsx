@@ -19,7 +19,7 @@ export default function VerifyLookupPage() {
         <ScanLine className="mx-auto h-9 w-9 text-emerald-800" />
         <h1 className="mt-3 text-center text-[18px] font-semibold text-neutral-900">Verify a DOAS document</h1>
         <p className="mt-1 text-center text-[13px] text-neutral-600">
-          Scan the QR code on the letter, receipt or certificate — or enter the code under its barcode.
+          Scan the QR code on the licence, letter, receipt or certificate — or enter the verification code printed on it.
         </p>
         <input
           autoFocus

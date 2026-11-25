@@ -7,6 +7,8 @@ import { doc, getDoc } from "firebase/firestore"
 import { BadgeCheck, Loader2, Printer, ShieldAlert } from "lucide-react"
 import { COL, db } from "@/lib/firebase"
 import { ISSUED_META, absoluteUrl, verifyPath, type IssuedDocument } from "@/lib/issued-documents"
+import { isLicence } from "@/lib/practising-licence"
+import { LicencePage } from "@/components/documents/licence-certificate"
 import { cn } from "@/lib/utils"
 
 /** Loads one issued document by code (public single-document read). */
@@ -179,6 +181,8 @@ export function DocumentPage({ code }: { code: string }) {
         <p className="max-w-sm text-[13px] text-neutral-600">{error || `No DOAS document has the code ${code}. Check the code and try again.`}</p>
       </div>
     )
+  // The practising licence is a landscape certificate with its own layout.
+  if (isLicence(d)) return <LicencePage document={d} />
   return (
     <div className="min-h-screen bg-neutral-100 py-8 print:bg-white print:py-0">
       <div className="mx-auto mb-4 flex max-w-[820px] items-center justify-between gap-3 px-4 print:hidden">
